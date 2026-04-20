@@ -48,7 +48,7 @@ RESET='\033[0m'
 # ─────────────────────────────────────────────────────────────────────────────────
 cleanup() {
     tput cnorm 2>/dev/null || true
-    rm -f /tmp/stub_clone_$$ /tmp/xui_cookie.txt /tmp/xuifast_payload.json 2>/dev/null
+    rm -rf /tmp/stub_clone_$$ /tmp/xui_cookie.txt /tmp/xuifast_payload.json 2>/dev/null
     echo ""
     if [[ "$LANG_CHOICE" == "ru" ]]; then
         echo -e "  ${YELLOW}⚠${RESET}  Установка прервана пользователем."
@@ -471,21 +471,11 @@ deploy_stub_site() {
 
     local clone_ok=0
     case "$tpl_source" in
-        html5up)
+        html5up|learning-zone)
+            # Sparse checkout: clone only the needed subdirectory
             if git clone --depth 1 --filter=blob:none --sparse "$tpl_repo" "$tmp_clone" >/dev/null 2>&1 || \
                git clone --depth 1 "$tpl_repo" "$tmp_clone" >/dev/null 2>&1; then
-                cd "$tmp_clone" && git sparse-checkout set "$tpl_path" 2>/dev/null; cd - >/dev/null
-                if [[ -d "$tmp_clone/$tpl_path" ]]; then
-                    rm -rf "${site_dir:?}"/*
-                    cp -r "$tmp_clone/$tpl_path"/* "$site_dir/" 2>/dev/null
-                    clone_ok=1
-                fi
-            fi
-            ;;
-        learning-zone)
-            if git clone --depth 1 --filter=blob:none --sparse "$tpl_repo" "$tmp_clone" >/dev/null 2>&1 || \
-               git clone --depth 1 "$tpl_repo" "$tmp_clone" >/dev/null 2>&1; then
-                cd "$tmp_clone" && git sparse-checkout set "$tpl_path" 2>/dev/null; cd - >/dev/null
+                (cd "$tmp_clone" && git sparse-checkout set "$tpl_path" 2>/dev/null)
                 if [[ -d "$tmp_clone/$tpl_path" ]]; then
                     rm -rf "${site_dir:?}"/*
                     cp -r "$tmp_clone/$tpl_path"/* "$site_dir/" 2>/dev/null
@@ -778,11 +768,12 @@ wait_for_api() {
 
 api_login() {
     # Single clean login, save cookie to file
+    # Use --data-urlencode for safe handling of special chars (&, =, +, etc.)
     local http_code
     http_code=$(curl -sk -w '%{http_code}' -o /dev/null -c /tmp/xui_cookie.txt \
         "${API_BASE}/login" \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "username=${XUI_USER}&password=${XUI_PASS}" 2>/dev/null)
+        --data-urlencode "username=${XUI_USER}" \
+        --data-urlencode "password=${XUI_PASS}" 2>/dev/null)
 
     if [[ "$http_code" != "200" ]] || [[ ! -f /tmp/xui_cookie.txt ]]; then
         return 1
@@ -864,7 +855,7 @@ api_create_inbound() {
         uuid=$(cat /proc/sys/kernel/random/uuid)
         USER_UUIDS+=("$uuid")
         local sub_id
-        sub_id=$(head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
+        sub_id=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
 
         [[ $i -gt 0 ]] && clients_arr+=","
         clients_arr+="{\"id\":\"${uuid}\",\"flow\":\"xtls-rprx-vision\",\"email\":\"${name_array[$i]}\",\"limitIp\":0,\"totalGB\":0,\"expiryTime\":0,\"enable\":true,\"tgId\":\"\",\"subId\":\"${sub_id}\",\"reset\":0}"
@@ -877,10 +868,19 @@ api_create_inbound() {
     local key_file="${KEY_PATH}"
     [[ "$MODE" == "ip" ]] && allow_insecure="True" && tls_sni=""
 
-    python3 -c "
+    # Write clients JSON to temp file first (avoids shell injection in python)
+    echo "[${clients_arr}]" > /tmp/xuifast_clients.json
+
+    python3 - "$tls_sni" "$cert_file" "$key_file" "$allow_insecure" << 'PYEOF' || { print_error "${L[inbound_failed]}"; return 1; }
 import json, sys
 
-clients = json.loads('[${clients_arr}]')
+tls_sni = sys.argv[1]
+cert_file = sys.argv[2]
+key_file = sys.argv[3]
+allow_insecure = sys.argv[4] == "True"
+
+with open('/tmp/xuifast_clients.json') as f:
+    clients = json.load(f)
 
 settings = json.dumps({
     'clients': clients,
@@ -892,16 +892,16 @@ stream = json.dumps({
     'network': 'tcp',
     'security': 'tls',
     'tlsSettings': {
-        'serverName': '${tls_sni}',
+        'serverName': tls_sni,
         'minVersion': '1.2',
         'maxVersion': '1.3',
         'cipherSuites': '',
         'rejectUnknownSni': False,
         'disableSystemRoot': False,
         'enableSessionResumption': False,
-        'certificates': [{'certificateFile': '${cert_file}', 'keyFile': '${key_file}', 'ocspStapling': 3600}],
+        'certificates': [{'certificateFile': cert_file, 'keyFile': key_file, 'ocspStapling': 3600}],
         'alpn': ['h2', 'http/1.1'],
-        'settings': {'allowInsecure': ${allow_insecure}, 'fingerprint': 'chrome'}
+        'settings': {'allowInsecure': allow_insecure, 'fingerprint': 'chrome'}
     },
     'tcpSettings': {'acceptProxyProtocol': False, 'header': {'type': 'none'}}
 })
@@ -925,7 +925,8 @@ payload = {
 }
 
 json.dump(payload, open('/tmp/xuifast_payload.json', 'w'))
-" || { print_error "${L[inbound_failed]}"; return 1; }
+PYEOF
+    rm -f /tmp/xuifast_clients.json
 
     local http_code
     http_code=$(curl -sk -w '%{http_code}' -o /dev/null \
@@ -962,9 +963,13 @@ generate_vless_link() {
     local host="$SERVER_IP"
     [[ "$MODE" == "domain" ]] && host="$DOMAIN"
 
+    # URL-encode the name for the fragment (important for Russian names)
+    local encoded_name
+    encoded_name=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$name'))" 2>/dev/null || echo "$name")
+
     local link="vless://${uuid}@${host}:443?type=tcp&security=tls&sni=${host}&fp=chrome&flow=xtls-rprx-vision"
     [[ "$MODE" == "ip" ]] && link+="&allowInsecure=1"
-    link+="#${name}"
+    link+="#${encoded_name}"
     echo "$link"
 }
 
@@ -990,7 +995,7 @@ check_client_online() {
         local response
         response=$(curl -sk -b /tmp/xui_cookie.txt "${API_BASE}/panel/api/inbounds/onlines" 2>/dev/null || true)
 
-        if [[ -n "$response" ]] && echo "$response" | grep -q "$email" 2>/dev/null; then
+        if [[ -n "$response" ]] && echo "$response" | grep -qF "$email" 2>/dev/null; then
             return 0
         fi
 
@@ -1230,11 +1235,16 @@ BANNER
     print_success "${L[panel_lang_set]}: $([ "$LANG_CHOICE" == "ru" ] && echo "Русский" || echo "English")"
     echo ""
 
-    # ── Get server IP ──
-    SERVER_IP=$(curl -s --max-time 10 ifconfig.me 2>/dev/null || \
-                curl -s --max-time 10 api.ipify.org 2>/dev/null || \
-                curl -s --max-time 10 icanhazip.com 2>/dev/null || echo "")
-    SERVER_IP=$(echo "$SERVER_IP" | tr -d '[:space:]')
+    # ── Get server IP (with validation) ──
+    SERVER_IP=""
+    for ip_service in ifconfig.me api.ipify.org icanhazip.com; do
+        local raw_ip
+        raw_ip=$(curl -s --max-time 10 "$ip_service" 2>/dev/null | tr -d '[:space:]')
+        if [[ "$raw_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            SERVER_IP="$raw_ip"
+            break
+        fi
+    done
 
     if [[ -z "$SERVER_IP" ]]; then
         print_error "Cannot detect server IP. Check internet connection."
@@ -1369,10 +1379,6 @@ BANNER
 
     # Optional: show all users
     show_all_users
-
-    # Repeat credentials one last time
-    echo ""
-    show_credentials
 
     # Cleanup
     rm -f /tmp/xui_cookie.txt
