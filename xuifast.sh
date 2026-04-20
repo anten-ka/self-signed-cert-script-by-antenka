@@ -1,11 +1,10 @@
 #!/bin/bash
 # ╔═══════════════════════════════════════════════════════════════════════════════╗
 # ║  XUIFAST — Professional 3X-UI Installer                                      ║
-# ║  Version: 2.0                                                                 ║
+# ║  Version: 2.1                                                                 ║
 # ║  Author: anten-ka                                                              ║
 # ║  Features: Bilingual, IP/Domain modes, Stub sites, VLESS auto-setup           ║
 # ╚═══════════════════════════════════════════════════════════════════════════════╝
-set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────────────────────────
 #  GLOBALS
@@ -25,7 +24,11 @@ KEY_PATH=""
 STUB_SITE=""
 LOG_FILE="/tmp/xuifast_install.log"
 API_BASE=""
-API_COOKIE=""
+CREDS_FILE="/root/.xuifast_credentials"
+
+# Global arrays for users (set in api_create_inbound, used in test/show)
+USER_NAMES=()
+USER_UUIDS=()
 
 # Colors
 RED='\033[0;31m'
@@ -41,6 +44,22 @@ UNDERLINE='\033[4m'
 RESET='\033[0m'
 
 # ─────────────────────────────────────────────────────────────────────────────────
+#  CLEANUP TRAP (Ctrl+C safety)
+# ─────────────────────────────────────────────────────────────────────────────────
+cleanup() {
+    tput cnorm 2>/dev/null || true
+    rm -f /tmp/stub_clone_$$ /tmp/xui_cookie.txt /tmp/xuifast_payload.json 2>/dev/null
+    echo ""
+    if [[ "$LANG_CHOICE" == "ru" ]]; then
+        echo -e "  ${YELLOW}⚠${RESET}  Установка прервана пользователем."
+    else
+        echo -e "  ${YELLOW}⚠${RESET}  Installation interrupted by user."
+    fi
+    exit 130
+}
+trap cleanup INT TERM
+
+# ─────────────────────────────────────────────────────────────────────────────────
 #  LOCALIZATION
 # ─────────────────────────────────────────────────────────────────────────────────
 declare -A L
@@ -51,60 +70,71 @@ set_lang_ru() {
     L[russian]="Русский"
     L[english]="English"
     L[choose_mode]="Выберите режим работы"
-    L[mode_ip]="По IP-адресу (самоподписной сертификат)"
-    L[mode_domain]="По доменному имени (Let's Encrypt)"
+    L[mode_ip]="По IP-адресу  (без домена, быстрая настройка)"
+    L[mode_domain]="По доменному имени  (нужен свой домен)"
+    L[mode_ip_hint]="Подходит если у вас нет домена. Сертификат выпускается автоматически."
+    L[mode_domain_hint]="Более надёжный вариант. Нужен домен, направленный на этот сервер."
     L[enter_domain]="Введите ваш домен (например: example.com)"
-    L[checking_domain]="Проверка DNS-записи домена..."
+    L[domain_empty]="Домен не может быть пустым! Попробуйте ещё раз."
+    L[checking_domain]="Проверка домена..."
     L[domain_ok]="Домен успешно направлен на этот сервер!"
     L[domain_fail]="Домен НЕ направлен на этот сервер."
-    L[domain_ip_mismatch]="Домен указывает на IP: %s, но IP сервера: %s"
-    L[domain_wait]="Хотите подождать и проверить снова?"
+    L[domain_ip_mismatch]="Домен указывает на IP: %s, а IP сервера: %s"
+    L[domain_how_to_fix]="Зайдите в панель управления вашего домена (GoDaddy, Namecheap, REG.RU и т.д.)\nи создайте A-запись, указывающую на IP: %s\nОбычно обновление занимает 5-15 минут."
+    L[domain_wait]="Подождать и проверить снова?"
     L[yes]="Да"
     L[no]="Нет"
-    L[installing_deps]="Установка зависимостей..."
-    L[installing_xui]="Установка 3X-UI панели..."
-    L[deploying_stub]="Развёртывание сайта-заглушки..."
-    L[configuring_vless]="Настройка VLESS соединения..."
+    L[installing_deps]="Установка необходимых программ..."
+    L[installing_xui]="Установка панели 3X-UI (это займёт 3-5 минут)..."
+    L[xui_install_failed]="Ошибка установки 3X-UI! Возможные причины:\n  1. Нет подключения к интернету\n  2. Сервер не на Ubuntu 20.04+\n  3. Недостаточно места на диске"
+    L[deploying_stub]="Развёртывание сайта-маскировки..."
+    L[configuring_vless]="Настройка VPN-соединения..."
     L[creating_users]="Создание пользователей..."
-    L[install_complete]="УСТАНОВКА ЗАВЕРШЕНА! ДАННЫЕ ДЛЯ ВХОДА:"
+    L[install_complete]="УСТАНОВКА ЗАВЕРШЕНА!"
+    L[login_title]="ДАННЫЕ ДЛЯ ВХОДА В ПАНЕЛЬ:"
     L[username]="Имя пользователя"
     L[password]="Пароль"
     L[port]="Порт"
     L[panel_path]="Путь панели"
     L[login_url]="Ссылка для входа"
+    L[how_to_login]="Откройте ссылку в браузере и введите логин и пароль выше."
     L[save_warning]="ОБЯЗАТЕЛЬНО СОХРАНИТЕ ЭТИ ДАННЫЕ!"
-    L[cert_info]="ИНФОРМАЦИЯ О СЕРТИФИКАТАХ:"
-    L[cert_ip_info]="Сертификаты автоматически генерируются панелью на 6 дней\nи затем автоматически продлеваются каждые 6 дней.\nНичего вручную прописывать не нужно."
-    L[cert_domain_info]="Сертификаты Let's Encrypt получены через 3X-UI.\nАвтоматическое обновление настроено.\nСрок действия: 90 дней с автопродлением."
-    L[ready]="Можно сразу приступать к настройке!"
-    L[download_happ]="СКАЧАЙТЕ ПРИЛОЖЕНИЕ-КЛИЕНТ"
-    L[choose_platform]="На какой платформе будете тестировать?"
-    L[ios]="iOS (iPhone/iPad)"
-    L[android]="Android"
-    L[scan_qr_app]="Отсканируйте QR-код для скачивания приложения Hiddify:"
-    L[confirm_installed]="Приложение установлено? (да/нет)"
-    L[test_connection]="ТЕСТИРОВАНИЕ СОЕДИНЕНИЯ"
-    L[scan_qr_config]="Отсканируйте QR-код конфигурации первого клиента:"
-    L[waiting_online]="Ожидание подключения клиента..."
-    L[client_online]="Клиент подключен! Соединение работает."
-    L[client_timeout]="Превышено время ожидания. Проверьте подключение вручную."
-    L[final_message]="Теперь вы можете работать в панели управления.\nИмпортируйте остальных пользователей через QR-коды в панели."
-    L[press_enter]="Нажмите [Enter], чтобы продолжить..."
-    L[error_root]="Запустите скрипт от имени root (sudo)!"
-    L[already_installed]="3X-UI уже установлена!"
-    L[users_created]="пользователей создано"
-    L[generating_names]="Генерация случайных имён..."
-    L[stub_choice]="Выбран сайт-заглушка"
-    L[checking_port]="Проверка доступности порта 443..."
-    L[port_busy]="Порт 443 занят! Останавливаю конфликтующие сервисы..."
-    L[nginx_installed]="Nginx установлен и настроен"
-    L[waiting_dns]="Ожидание обновления DNS..."
-    L[retry_seconds]="Повторная проверка через %s секунд..."
+    L[creds_saved]="Данные также сохранены в файл: %s"
+    L[cert_info]="О СЕРТИФИКАТАХ:"
+    L[cert_ip_info]="Сертификаты создаются автоматически на 6 дней\nи автоматически продлеваются. Ничего делать не нужно."
+    L[cert_domain_info]="Сертификаты Let's Encrypt получены автоматически.\nСрок действия: 90 дней с автопродлением."
+    L[ready]="Можно приступать к работе!"
+    L[download_happ]="СКАЧАЙТЕ VPN-ПРИЛОЖЕНИЕ"
+    L[choose_platform]="На каком устройстве будете использовать VPN?"
+    L[ios]="iPhone / iPad"
+    L[android]="Android-телефон"
+    L[scan_qr_app]="Отсканируйте QR-код камерой телефона для скачивания:"
+    L[confirm_installed]="Приложение установлено?"
+    L[confirm_hint]="Введите 'да' когда установите приложение"
+    L[test_connection]="ПРОВЕРКА VPN-СОЕДИНЕНИЯ"
+    L[scan_qr_config]="Отсканируйте этот QR-код в приложении Hiddify:"
+    L[waiting_online]="Ожидание подключения..."
+    L[skip_hint]="(нажмите Enter чтобы пропустить)"
+    L[client_online]="Подключение работает! Всё настроено."
+    L[client_timeout]="Не удалось подтвердить подключение автоматически.\nЭто нормально — попробуйте вручную в приложении."
+    L[final_message]="Всё готово! Вы можете войти в панель управления\nи добавить VPN остальным пользователям."
+    L[press_enter]="Нажмите Enter..."
+    L[error_root]="Запустите скрипт от имени root: sudo bash xuifast.sh"
+    L[already_installed]="3X-UI уже установлена. Вот ваши данные:"
+    L[creds_not_found]="Не удалось получить данные панели. Попробуйте:\n  sudo x-ui settings"
+    L[users_created]="VPN-пользователей создано"
+    L[stub_choice]="Сайт-маскировка установлен"
+    L[port_busy]="Порт 443 занят, освобождаю..."
+    L[nginx_installed]="Веб-сервер настроен"
+    L[retry_seconds]="Повторная проверка через %s сек..."
     L[attempt]="Попытка"
-    L[of]="из"
-    L[panel_lang_set]="Язык панели установлен"
-    L[connection_info]="ИНФОРМАЦИЯ О ПОДКЛЮЧЕНИИ"
-    L[all_users_info]="ДАННЫЕ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ"
+    L[panel_lang_set]="Язык панели"
+    L[all_users_info]="ВСЕ VPN-ПОЛЬЗОВАТЕЛИ"
+    L[show_all_users_q]="Показать данные всех 10 пользователей?"
+    L[invalid_input]="Неверный ввод. Попробуйте ещё раз."
+    L[api_login_failed]="Не удалось подключиться к панели. Перезапускаю..."
+    L[api_retry]="Повторная попытка подключения..."
+    L[inbound_failed]="Ошибка создания VPN-соединения. Создайте вручную в панели."
 }
 
 set_lang_en() {
@@ -112,68 +142,78 @@ set_lang_en() {
     L[choose_lang]="Выберите язык / Choose language"
     L[russian]="Русский"
     L[english]="English"
-    L[choose_mode]="Choose operation mode"
-    L[mode_ip]="By IP address (self-signed certificate)"
-    L[mode_domain]="By domain name (Let's Encrypt)"
+    L[choose_mode]="Choose setup mode"
+    L[mode_ip]="By IP address  (no domain needed, quick setup)"
+    L[mode_domain]="By domain name  (requires your own domain)"
+    L[mode_ip_hint]="Best if you don't have a domain. Certificate is created automatically."
+    L[mode_domain_hint]="More reliable option. Requires a domain pointed at this server."
     L[enter_domain]="Enter your domain (e.g.: example.com)"
-    L[checking_domain]="Checking domain DNS record..."
+    L[domain_empty]="Domain cannot be empty! Try again."
+    L[checking_domain]="Checking domain..."
     L[domain_ok]="Domain is correctly pointed to this server!"
     L[domain_fail]="Domain is NOT pointed to this server."
-    L[domain_ip_mismatch]="Domain resolves to IP: %s, but server IP is: %s"
-    L[domain_wait]="Want to wait and check again?"
+    L[domain_ip_mismatch]="Domain resolves to: %s, but server IP is: %s"
+    L[domain_how_to_fix]="Go to your domain provider (GoDaddy, Namecheap, Cloudflare, etc.)\nand create an A record pointing to: %s\nThis usually takes 5-15 minutes to update."
+    L[domain_wait]="Wait and check again?"
     L[yes]="Yes"
     L[no]="No"
-    L[installing_deps]="Installing dependencies..."
-    L[installing_xui]="Installing 3X-UI panel..."
-    L[deploying_stub]="Deploying stub website..."
-    L[configuring_vless]="Configuring VLESS connection..."
+    L[installing_deps]="Installing required software..."
+    L[installing_xui]="Installing 3X-UI panel (this takes 3-5 minutes)..."
+    L[xui_install_failed]="3X-UI installation failed! Possible reasons:\n  1. No internet connection\n  2. Server not running Ubuntu 20.04+\n  3. Not enough disk space"
+    L[deploying_stub]="Setting up camouflage website..."
+    L[configuring_vless]="Configuring VPN connection..."
     L[creating_users]="Creating users..."
-    L[install_complete]="INSTALLATION COMPLETE! LOGIN CREDENTIALS:"
+    L[install_complete]="INSTALLATION COMPLETE!"
+    L[login_title]="PANEL LOGIN CREDENTIALS:"
     L[username]="Username"
     L[password]="Password"
     L[port]="Port"
     L[panel_path]="Panel path"
     L[login_url]="Login URL"
+    L[how_to_login]="Open the link in your browser and enter the username/password above."
     L[save_warning]="MAKE SURE TO SAVE THESE CREDENTIALS!"
-    L[cert_info]="CERTIFICATE INFORMATION:"
-    L[cert_ip_info]="Certificates are auto-generated by the panel for 6 days\nand automatically renewed every 6 days.\nNo manual configuration needed."
-    L[cert_domain_info]="Let's Encrypt certificates obtained via 3X-UI.\nAutomatic renewal is configured.\nValidity: 90 days with auto-renewal."
-    L[ready]="Ready to start configuring connections!"
-    L[download_happ]="DOWNLOAD THE CLIENT APP"
-    L[choose_platform]="Which platform will you test on?"
-    L[ios]="iOS (iPhone/iPad)"
-    L[android]="Android"
-    L[scan_qr_app]="Scan the QR code to download Hiddify app:"
-    L[confirm_installed]="Is the app installed? (yes/no)"
-    L[test_connection]="CONNECTION TEST"
-    L[scan_qr_config]="Scan the QR code of the first client config:"
-    L[waiting_online]="Waiting for client to connect..."
-    L[client_online]="Client connected! Connection is working."
-    L[client_timeout]="Timeout exceeded. Check the connection manually."
-    L[final_message]="You can now work in the control panel.\nImport other users via QR codes in the panel."
-    L[press_enter]="Press [Enter] to continue..."
-    L[error_root]="Run this script as root (sudo)!"
-    L[already_installed]="3X-UI is already installed!"
-    L[users_created]="users created"
-    L[generating_names]="Generating random names..."
-    L[stub_choice]="Stub website selected"
-    L[checking_port]="Checking port 443 availability..."
-    L[port_busy]="Port 443 is busy! Stopping conflicting services..."
-    L[nginx_installed]="Nginx installed and configured"
-    L[waiting_dns]="Waiting for DNS update..."
-    L[retry_seconds]="Rechecking in %s seconds..."
+    L[creds_saved]="Credentials also saved to: %s"
+    L[cert_info]="ABOUT CERTIFICATES:"
+    L[cert_ip_info]="Certificates are auto-generated for 6 days\nand automatically renewed. No action needed."
+    L[cert_domain_info]="Let's Encrypt certificates obtained automatically.\nValid for 90 days with auto-renewal."
+    L[ready]="Ready to go!"
+    L[download_happ]="DOWNLOAD VPN APP"
+    L[choose_platform]="What device will you use VPN on?"
+    L[ios]="iPhone / iPad"
+    L[android]="Android phone"
+    L[scan_qr_app]="Scan the QR code with your phone camera to download:"
+    L[confirm_installed]="Is the app installed?"
+    L[confirm_hint]="Type 'yes' when you've installed the app"
+    L[test_connection]="VPN CONNECTION TEST"
+    L[scan_qr_config]="Scan this QR code in the Hiddify app:"
+    L[waiting_online]="Waiting for connection..."
+    L[skip_hint]="(press Enter to skip)"
+    L[client_online]="Connection works! Everything is set up."
+    L[client_timeout]="Could not confirm connection automatically.\nThis is normal — try connecting manually in the app."
+    L[final_message]="All done! You can log into the control panel\nand add VPN for more users."
+    L[press_enter]="Press Enter..."
+    L[error_root]="Run as root: sudo bash xuifast.sh"
+    L[already_installed]="3X-UI is already installed. Here are your credentials:"
+    L[creds_not_found]="Could not retrieve panel credentials. Try:\n  sudo x-ui settings"
+    L[users_created]="VPN users created"
+    L[stub_choice]="Camouflage website deployed"
+    L[port_busy]="Port 443 is busy, freeing it..."
+    L[nginx_installed]="Web server configured"
+    L[retry_seconds]="Rechecking in %s sec..."
     L[attempt]="Attempt"
-    L[of]="of"
-    L[panel_lang_set]="Panel language set"
-    L[connection_info]="CONNECTION INFORMATION"
-    L[all_users_info]="ALL USERS DATA"
+    L[panel_lang_set]="Panel language"
+    L[all_users_info]="ALL VPN USERS"
+    L[show_all_users_q]="Show all 10 user configs?"
+    L[invalid_input]="Invalid input. Try again."
+    L[api_login_failed]="Could not connect to panel. Restarting..."
+    L[api_retry]="Retrying connection..."
+    L[inbound_failed]="Failed to create VPN connection. Create it manually in the panel."
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
 #  UI HELPERS
 # ─────────────────────────────────────────────────────────────────────────────────
 
-# Spinner animation
 spinner() {
     local pid=$1
     local msg=$2
@@ -187,30 +227,22 @@ spinner() {
     done
     wait "$pid" 2>/dev/null
     local exit_code=$?
-    printf "\r  ${GREEN}✓${RESET} %s\n" "$msg"
+    if [[ $exit_code -eq 0 ]]; then
+        printf "\r  ${GREEN}✓${RESET} %s\n" "$msg"
+    else
+        printf "\r  ${RED}✗${RESET} %s\n" "$msg"
+    fi
     tput cnorm 2>/dev/null || true
     return $exit_code
 }
 
-# Progress bar
-progress_bar() {
-    local current=$1
-    local total=$2
-    local width=40
-    local pct=$(( current * 100 / total ))
-    local filled=$(( current * width / total ))
-    local empty=$(( width - filled ))
-    local bar=""
-    for ((i=0; i<filled; i++)); do bar+="█"; done
-    for ((i=0; i<empty; i++)); do bar+="░"; done
-    printf "\r  ${CYAN}[${bar}]${RESET} ${WHITE}%3d%%${RESET}" "$pct"
-}
-
-# Box drawing
 print_header() {
     local text="$1"
     local width=60
-    local padding=$(( (width - ${#text}) / 2 ))
+    local text_len=${#text}
+    # Clamp for long UTF-8 strings
+    if [[ $text_len -gt $width ]]; then text_len=$width; fi
+    local padding=$(( (width - text_len) / 2 ))
     echo ""
     printf "  ${PURPLE}╔"
     printf '═%.0s' $(seq 1 $width)
@@ -218,7 +250,7 @@ print_header() {
     printf "  ${PURPLE}║${RESET}"
     printf '%*s' $padding ''
     printf "${BOLD}${WHITE}%s${RESET}" "$text"
-    printf '%*s' $(( width - padding - ${#text} )) ''
+    printf '%*s' $(( width - padding - text_len )) ''
     printf "${PURPLE}║${RESET}\n"
     printf "  ${PURPLE}╚"
     printf '═%.0s' $(seq 1 $width)
@@ -230,13 +262,6 @@ print_separator() {
     printf "  ${DIM}"
     printf '─%.0s' $(seq 1 60)
     printf "${RESET}\n"
-}
-
-print_box_line() {
-    local icon="$1"
-    local label="$2"
-    local value="$3"
-    printf "  ${DIM}│${RESET} %s ${WHITE}%-18s${RESET} ${BOLD}${GREEN}%s${RESET}\n" "$icon" "$label:" "$value"
 }
 
 print_info() {
@@ -261,15 +286,44 @@ wait_enter() {
     read -r
 }
 
-# Animated text typing effect
-type_text() {
-    local text="$1"
-    local delay="${2:-0.02}"
-    for ((i=0; i<${#text}; i++)); do
-        printf "%s" "${text:$i:1}"
-        sleep "$delay"
+# Read a choice with validation. Usage: read_choice "prompt" 1 3 → sets REPLY
+read_choice() {
+    local prompt="$1"
+    local min="$2"
+    local max="$3"
+    while true; do
+        printf "  ${CYAN}▸${RESET} "
+        read -r REPLY
+        if [[ "$REPLY" =~ ^[0-9]+$ ]] && [[ "$REPLY" -ge "$min" ]] && [[ "$REPLY" -le "$max" ]]; then
+            return 0
+        fi
+        print_warning "${L[invalid_input]:-Invalid input. Try again.}"
     done
-    echo ""
+}
+
+# Confirm yes/no. Returns 0 for yes, 1 for no.
+confirm_yes() {
+    local answer
+    read -r answer
+    answer=$(echo "$answer" | tr '[:upper:]' '[:lower:]')
+    case "$answer" in
+        y|yes|да|д|1|ок|ok) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+show_qr() {
+    local data="$1"
+    if command -v qrencode &>/dev/null; then
+        qrencode -t ANSIUTF8 "$data" 2>/dev/null || {
+            echo ""
+            printf "  ${DIM}Link: %s${RESET}\n" "$data"
+        }
+    else
+        echo ""
+        printf "  ${YELLOW}⚠${RESET}  QR unavailable. Use link:\n"
+        printf "  ${CYAN}%s${RESET}\n" "$data"
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -362,7 +416,7 @@ generate_random_names() {
             "lemur" "chimp" "gorilla" "mandrill" "capuchin"
             "ray" "octopus" "squid" "crab" "lobster"
             "mustang" "wisent" "yak" "buffalo" "gazelle"
-            "fox" "manul" "snowleopard" "cheetah" "ocelot"
+            "arcticfox" "manul" "snowleopard" "cheetah" "ocelot"
             "albatross" "condor" "vulture" "peregrine" "harrier"
             "salamander" "newt" "axolotl" "gecko" "python"
             "narwhal" "beluga" "manatee" "dugong" "whale"
@@ -372,22 +426,19 @@ generate_random_names() {
     fi
 
     local names=()
-    local used=()
+    local used_map=""
+    local attempts=0
 
-    while [ ${#names[@]} -lt "$count" ]; do
+    while [[ ${#names[@]} -lt "$count" ]] && [[ $attempts -lt 200 ]]; do
         local adj_idx=$(( RANDOM % ${#adjectives[@]} ))
         local ani_idx=$(( RANDOM % ${#animals[@]} ))
         local name="${adjectives[$adj_idx]}-${animals[$ani_idx]}"
+        attempts=$((attempts + 1))
 
-        # Check uniqueness
-        local dup=0
-        for u in "${used[@]:-}"; do
-            if [[ "$u" == "$name" ]]; then dup=1; break; fi
-        done
-
-        if [[ $dup -eq 0 ]]; then
+        # Check uniqueness via string search
+        if [[ "$used_map" != *"|${name}|"* ]]; then
             names+=("$name")
-            used+=("$name")
+            used_map+="|${name}|"
         fi
     done
 
@@ -396,10 +447,6 @@ generate_random_names() {
 
 # ─────────────────────────────────────────────────────────────────────────────────
 #  STUB WEBSITES (3 variants from open-source template libraries)
-#  Sources:
-#    1) Dimension   — html5up.net (html5up/zce repo, CC BY 3.0)
-#    2) Coffee Shop — learning-zone/website-templates (MIT)
-#    3) Clean Blog  — StartBootstrap (MIT)
 # ─────────────────────────────────────────────────────────────────────────────────
 
 TEMPLATES=(
@@ -414,89 +461,73 @@ deploy_stub_site() {
 
     mkdir -p "$site_dir"
 
-    # Pick random template (1-3)
     local pick=$(( RANDOM % ${#TEMPLATES[@]} ))
     local tpl="${TEMPLATES[$pick]}"
 
     IFS='|' read -r tpl_id tpl_name tpl_repo tpl_source tpl_path <<< "$tpl"
     STUB_SITE="$tpl_name"
 
-    print_info "${L[deploying_stub]}: ${BOLD}${tpl_name}${RESET} (${tpl_source})"
-
     rm -rf "$tmp_clone"
 
+    local clone_ok=0
     case "$tpl_source" in
         html5up)
-            # html5up repo (zce/html5up) — mono-repo with folders per template
-            git clone --depth 1 --filter=blob:none --sparse "$tpl_repo" "$tmp_clone" >/dev/null 2>&1
-            if [ $? -ne 0 ]; then
-                git clone --depth 1 "$tpl_repo" "$tmp_clone" >/dev/null 2>&1
-            fi
-            if [ -d "$tmp_clone" ]; then
-                cd "$tmp_clone" && git sparse-checkout set "$tpl_path" 2>/dev/null
-                if [ -d "$tmp_clone/$tpl_path" ]; then
+            if git clone --depth 1 --filter=blob:none --sparse "$tpl_repo" "$tmp_clone" >/dev/null 2>&1 || \
+               git clone --depth 1 "$tpl_repo" "$tmp_clone" >/dev/null 2>&1; then
+                cd "$tmp_clone" && git sparse-checkout set "$tpl_path" 2>/dev/null; cd - >/dev/null
+                if [[ -d "$tmp_clone/$tpl_path" ]]; then
                     rm -rf "${site_dir:?}"/*
-                    cp -r "$tmp_clone/$tpl_path"/* "$site_dir/"
+                    cp -r "$tmp_clone/$tpl_path"/* "$site_dir/" 2>/dev/null
+                    clone_ok=1
                 fi
-                cd - >/dev/null
             fi
             ;;
-
         learning-zone)
-            # learning-zone/website-templates — mono-repo with folders
-            git clone --depth 1 --filter=blob:none --sparse "$tpl_repo" "$tmp_clone" >/dev/null 2>&1
-            if [ $? -ne 0 ]; then
-                git clone --depth 1 "$tpl_repo" "$tmp_clone" >/dev/null 2>&1
-            fi
-            if [ -d "$tmp_clone" ]; then
-                cd "$tmp_clone" && git sparse-checkout set "$tpl_path" 2>/dev/null
-                if [ -d "$tmp_clone/$tpl_path" ]; then
+            if git clone --depth 1 --filter=blob:none --sparse "$tpl_repo" "$tmp_clone" >/dev/null 2>&1 || \
+               git clone --depth 1 "$tpl_repo" "$tmp_clone" >/dev/null 2>&1; then
+                cd "$tmp_clone" && git sparse-checkout set "$tpl_path" 2>/dev/null; cd - >/dev/null
+                if [[ -d "$tmp_clone/$tpl_path" ]]; then
                     rm -rf "${site_dir:?}"/*
-                    cp -r "$tmp_clone/$tpl_path"/* "$site_dir/"
+                    cp -r "$tmp_clone/$tpl_path"/* "$site_dir/" 2>/dev/null
+                    clone_ok=1
                 fi
-                cd - >/dev/null
             fi
             ;;
-
         startbootstrap)
-            # StartBootstrap — each template is its own repo, dist/ has production files
-            git clone --depth 1 "$tpl_repo" "$tmp_clone" >/dev/null 2>&1
-            if [ -d "$tmp_clone" ]; then
+            if git clone --depth 1 "$tpl_repo" "$tmp_clone" >/dev/null 2>&1; then
                 rm -rf "${site_dir:?}"/*
-                if [ -f "$tmp_clone/dist/index.html" ]; then
+                if [[ -f "$tmp_clone/dist/index.html" ]]; then
                     cp -r "$tmp_clone/dist/"* "$site_dir/"
-                elif [ -f "$tmp_clone/index.html" ]; then
+                elif [[ -f "$tmp_clone/index.html" ]]; then
                     cp -r "$tmp_clone/"* "$site_dir/"
                 else
                     local found_idx
                     found_idx=$(find "$tmp_clone" -name "index.html" -type f 2>/dev/null | head -1)
-                    if [ -n "$found_idx" ]; then
-                        cp -r "$(dirname "$found_idx")"/* "$site_dir/"
-                    fi
+                    [[ -n "$found_idx" ]] && cp -r "$(dirname "$found_idx")"/* "$site_dir/"
                 fi
+                clone_ok=1
             fi
             ;;
     esac
 
     rm -rf "$tmp_clone"
 
-    # Verify deployment
-    if [ -f "$site_dir/index.html" ]; then
+    # Verify or fallback
+    if [[ $clone_ok -eq 1 ]] && [[ -f "$site_dir/index.html" ]]; then
         chown -R www-data:www-data "$site_dir" 2>/dev/null || true
         chmod -R 755 "$site_dir"
-        print_success "${L[stub_choice]}: $STUB_SITE"
     else
-        # Fallback: create a minimal professional page if git clone failed
-        print_warning "Git clone failed, deploying built-in fallback..."
+        # Fallback
         cat > "$site_dir/index.html" << 'FALLBACKEOF'
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Welcome</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}
 .c{max-width:600px;padding:2rem}h1{font-size:2.5rem;margin-bottom:1rem;background:linear-gradient(135deg,#6366f1,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-p{color:#94a3b8;line-height:1.8}</style></head><body><div class="c"><h1>Welcome</h1><p>This site is currently under construction. Please check back later.</p></div></body></html>
+p{color:#94a3b8;line-height:1.8}</style></head><body><div class="c"><h1>Welcome</h1><p>Site under construction.</p></div></body></html>
 FALLBACKEOF
-        STUB_SITE="Fallback (minimal)"
-        print_success "${L[stub_choice]}: $STUB_SITE"
+        STUB_SITE="Fallback"
     fi
+
+    print_success "${L[stub_choice]}: $STUB_SITE"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -504,8 +535,8 @@ FALLBACKEOF
 # ─────────────────────────────────────────────────────────────────────────────────
 
 setup_nginx() {
-    # Stop anything on port 443
-    if ss -tlnp | grep -q ':443 '; then
+    # Free port 443 if occupied
+    if ss -tlnp 2>/dev/null | grep -q ':443 '; then
         print_warning "${L[port_busy]}"
         systemctl stop nginx 2>/dev/null || true
         systemctl stop apache2 2>/dev/null || true
@@ -513,14 +544,10 @@ setup_nginx() {
         sleep 1
     fi
 
-    apt-get install -y nginx >/dev/null 2>&1
+    apt-get install -y nginx >/dev/null 2>&1 || true
 
-    # Create nginx config for stub site
-    if [[ "$MODE" == "domain" ]]; then
-        local server_name="$DOMAIN"
-    else
-        local server_name="_"
-    fi
+    local server_name="_"
+    [[ "$MODE" == "domain" ]] && server_name="$DOMAIN"
 
     cat > /etc/nginx/sites-available/stub << NGINXEOF
 server {
@@ -529,21 +556,43 @@ server {
     server_name ${server_name};
     root /var/www/html;
     index index.html;
-
-    location / {
-        try_files \$uri \$uri/ =404;
-    }
+    location / { try_files \$uri \$uri/ =404; }
+    location = /favicon.ico { log_not_found off; access_log off; }
 }
 NGINXEOF
 
     ln -sf /etc/nginx/sites-available/stub /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
 
-    nginx -t >/dev/null 2>&1
-    systemctl enable nginx >/dev/null 2>&1
-    systemctl restart nginx
+    if nginx -t >/dev/null 2>&1; then
+        systemctl enable nginx >/dev/null 2>&1
+        systemctl restart nginx
+        print_success "${L[nginx_installed]}"
+    else
+        print_warning "Nginx config error, trying to fix..."
+        rm -f /etc/nginx/sites-enabled/*
+        ln -sf /etc/nginx/sites-available/stub /etc/nginx/sites-enabled/
+        systemctl restart nginx 2>/dev/null || true
+    fi
+}
 
-    print_success "${L[nginx_installed]}"
+# Reconfigure after xray takes port 443
+setup_fallback_nginx() {
+    cat > /etc/nginx/sites-available/stub << NGINXEOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    root /var/www/html;
+    index index.html;
+    location / { try_files \$uri \$uri/ =404; }
+    location = /favicon.ico { log_not_found off; access_log off; }
+}
+NGINXEOF
+
+    ln -sf /etc/nginx/sites-available/stub /etc/nginx/sites-enabled/
+    rm -f /etc/nginx/sites-enabled/default
+    nginx -t >/dev/null 2>&1 && systemctl restart nginx 2>/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -556,23 +605,28 @@ check_dns() {
     local attempt=1
 
     while true; do
-        printf "\r  ${CYAN}◌${RESET} ${L[checking_domain]} (${L[attempt]} $attempt)"
+        printf "\r  ${CYAN}◌${RESET} ${L[checking_domain]} (${L[attempt]} %d)  " "$attempt"
 
-        local resolved_ip
-        resolved_ip=$(dig +short "$domain" A 2>/dev/null | head -1)
+        local resolved_ip=""
+        resolved_ip=$(dig +short "$domain" A 2>/dev/null | grep -E '^[0-9]+\.' | head -1)
 
         if [[ "$resolved_ip" == "$SERVER_IP" ]]; then
-            printf "\r  ${GREEN}✓${RESET} ${L[domain_ok]}                           \n"
+            printf "\r  ${GREEN}✓${RESET} ${L[domain_ok]}                              \n"
             return 0
         fi
 
+        printf "\n"
         if [[ -n "$resolved_ip" ]]; then
-            printf "\n"
             print_warning "$(printf "${L[domain_ip_mismatch]}" "$resolved_ip" "$SERVER_IP")"
         else
-            printf "\n"
             print_warning "${L[domain_fail]}"
         fi
+
+        # Show how to fix
+        echo ""
+        printf "  ${DIM}"
+        printf "${L[domain_how_to_fix]}" "$SERVER_IP"
+        printf "${RESET}\n"
 
         if [[ $attempt -ge $max_attempts ]]; then
             return 1
@@ -580,10 +634,7 @@ check_dns() {
 
         echo ""
         printf "  ${YELLOW}?${RESET} ${L[domain_wait]} [${L[yes]}/${L[no]}]: "
-        read -r answer
-        answer=$(echo "$answer" | tr '[:upper:]' '[:lower:]')
-
-        if [[ "$answer" == "n" ]] || [[ "$answer" == "no" ]] || [[ "$answer" == "нет" ]] || [[ "$answer" == "н" ]]; then
+        if ! confirm_yes; then
             return 1
         fi
 
@@ -603,61 +654,47 @@ check_dns() {
 # ─────────────────────────────────────────────────────────────────────────────────
 
 install_3xui() {
-    print_info "${L[installing_xui]}"
     > "$LOG_FILE"
 
-    # Determine ACME option based on mode
     if [[ "$MODE" == "domain" ]]; then
-        # For domain mode: we'll get certs via 3x-ui ACME with domain
-        expect << XEOF | tee "$LOG_FILE" > /dev/null 2>&1
+        expect << XEOF 2>&1 | tee -a "$LOG_FILE" >/dev/null
 set timeout 600
 spawn bash -c "curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh | bash"
 
-expect "Confirm the installation"
-sleep 1
-send "y\r"
-
-expect "customize the Panel Port settings"
-sleep 1
-send "n\r"
-
-expect "Choose an option"
-sleep 1
-send "1\r"
-
-expect "Please enter your domain name"
-sleep 1
-send "${DOMAIN}\r"
-
-expect eof
+expect {
+    -re "(?i)confirm.*install" { sleep 1; send "y\r"; exp_continue }
+    -re "(?i)customize.*panel.*port" { sleep 1; send "n\r"; exp_continue }
+    -re "(?i)choose.*option|SSL certificate" { sleep 1; send "1\r"; exp_continue }
+    -re "(?i)domain" { sleep 1; send "${DOMAIN}\r"; exp_continue }
+    -re "(?i)email.*acme|email.*cert" { sleep 1; send "\r"; exp_continue }
+    -re "(?i)reload.*cmd|reloadcmd" { sleep 1; send "n\r"; exp_continue }
+    timeout { }
+    eof { }
+}
 XEOF
     else
-        # For IP mode: self-signed certs (option 2 = self-signed)
-        expect << XEOF | tee "$LOG_FILE" > /dev/null 2>&1
+        expect << XEOF 2>&1 | tee -a "$LOG_FILE" >/dev/null
 set timeout 600
 spawn bash -c "curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh | bash"
 
-expect "Confirm the installation"
-sleep 1
-send "y\r"
-
-expect "customize the Panel Port settings"
-sleep 1
-send "n\r"
-
-expect "Choose an option"
-sleep 1
-send "2\r"
-
-expect "Port to use for ACME"
-sleep 1
-send "\r"
-
-expect eof
+expect {
+    -re "(?i)confirm.*install" { sleep 1; send "y\r"; exp_continue }
+    -re "(?i)customize.*panel.*port" { sleep 1; send "n\r"; exp_continue }
+    -re "(?i)choose.*option|SSL certificate" { sleep 1; send "2\r"; exp_continue }
+    -re "(?i)port.*acme|port.*use" { sleep 1; send "\r"; exp_continue }
+    -re "(?i)reload.*cmd|reloadcmd" { sleep 1; send "n\r"; exp_continue }
+    timeout { }
+    eof { }
+}
 XEOF
     fi
 
+    # Verify installation succeeded
     sleep 3
+    if [[ ! -f "/usr/local/x-ui/x-ui" ]]; then
+        print_error "$(echo -e "${L[xui_install_failed]}")"
+        exit 1
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -665,29 +702,35 @@ XEOF
 # ─────────────────────────────────────────────────────────────────────────────────
 
 extract_credentials() {
-    # From database
-    if [ -f "$XUI_DB" ]; then
-        XUI_USER=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='username';" 2>/dev/null)
-        XUI_PASS=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='password';" 2>/dev/null)
-        XUI_PORT=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='port';" 2>/dev/null)
-        XUI_PATH=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='webBasePath';" 2>/dev/null)
+    # From database first
+    if [[ -f "$XUI_DB" ]] && command -v sqlite3 &>/dev/null; then
+        XUI_USER=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='username';" 2>/dev/null || true)
+        XUI_PASS=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='password';" 2>/dev/null || true)
+        XUI_PORT=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='port';" 2>/dev/null || true)
+        XUI_PATH=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='webBasePath';" 2>/dev/null || true)
     fi
 
     # Fallback to log
     if [[ -z "$XUI_USER" ]] || [[ -z "$XUI_PASS" ]]; then
-        XUI_USER=$(grep "Username:" "$LOG_FILE" 2>/dev/null | tail -1 | awk '{print $NF}' | tr -d '\r')
-        XUI_PASS=$(grep "Password:" "$LOG_FILE" 2>/dev/null | tail -1 | awk '{print $NF}' | tr -d '\r')
+        XUI_USER=$(grep -oP 'Username:\s*\K\S+' "$LOG_FILE" 2>/dev/null | tail -1 | tr -d '\r')
+        XUI_PASS=$(grep -oP 'Password:\s*\K\S+' "$LOG_FILE" 2>/dev/null | tail -1 | tr -d '\r')
     fi
 
-    if [[ ! "$XUI_PORT" =~ ^[0-9]+$ ]]; then
-        XUI_PORT=$(grep -E "Port:[[:space:]]+[0-9]+" "$LOG_FILE" 2>/dev/null | tail -1 | awk '{print $NF}' | tr -d '\r')
+    if [[ ! "${XUI_PORT:-}" =~ ^[0-9]+$ ]]; then
+        XUI_PORT=$(grep -oP 'Port:\s*\K[0-9]+' "$LOG_FILE" 2>/dev/null | tail -1 | tr -d '\r')
     fi
 
-    if [[ -z "$XUI_PATH" ]]; then
-        XUI_PATH=$(grep "WebBasePath:" "$LOG_FILE" 2>/dev/null | tail -1 | awk '{print $NF}' | tr -d '\r')
+    if [[ -z "${XUI_PATH:-}" ]]; then
+        XUI_PATH=$(grep -oP 'WebBasePath:\s*\K\S+' "$LOG_FILE" 2>/dev/null | tail -1 | tr -d '\r')
     fi
 
-    XUI_PATH=$(echo "$XUI_PATH" | tr -d '"/')
+    XUI_PATH=$(echo "${XUI_PATH:-}" | tr -d '"/')
+
+    # Validate we got something
+    if [[ -z "$XUI_USER" ]] || [[ -z "$XUI_PASS" ]] || [[ -z "$XUI_PORT" ]]; then
+        print_error "$(echo -e "${L[creds_not_found]}")"
+        return 1
+    fi
 
     if [[ "$MODE" == "domain" ]]; then
         XUI_URL="https://${DOMAIN}:${XUI_PORT}/${XUI_PATH}/"
@@ -697,260 +740,216 @@ extract_credentials() {
 
     API_BASE="https://127.0.0.1:${XUI_PORT}/${XUI_PATH}"
 
+    # Save credentials to file for recovery
+    cat > "$CREDS_FILE" << CREDEOF
+# XUIFAST Panel Credentials (auto-saved)
+USERNAME=$XUI_USER
+PASSWORD=$XUI_PASS
+PORT=$XUI_PORT
+PATH=/${XUI_PATH}/
+URL=$XUI_URL
+MODE=$MODE
+DOMAIN=$DOMAIN
+IP=$SERVER_IP
+CREDEOF
+    chmod 600 "$CREDS_FILE"
+
     rm -f "$LOG_FILE"
+    return 0
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
 #  3X-UI API FUNCTIONS
 # ─────────────────────────────────────────────────────────────────────────────────
 
+# Wait for panel API to become available
+wait_for_api() {
+    local max_wait=60
+    local elapsed=0
+    while [[ $elapsed -lt $max_wait ]]; do
+        if curl -sk --max-time 3 "${API_BASE}/login" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    return 1
+}
+
 api_login() {
-    local response
-    response=$(curl -sk -c - "${API_BASE}/login" \
+    # Single clean login, save cookie to file
+    local http_code
+    http_code=$(curl -sk -w '%{http_code}' -o /dev/null -c /tmp/xui_cookie.txt \
+        "${API_BASE}/login" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "username=${XUI_USER}&password=${XUI_PASS}" 2>/dev/null)
 
-    API_COOKIE=$(curl -sk -c - -D - "${API_BASE}/login" \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "username=${XUI_USER}&password=${XUI_PASS}" 2>/dev/null | grep -i 'set-cookie' | head -1 | sed 's/.*: //' | sed 's/;.*//')
+    if [[ "$http_code" != "200" ]] || [[ ! -f /tmp/xui_cookie.txt ]]; then
+        return 1
+    fi
+    return 0
+}
 
-    # Save cookie to file for reuse
-    curl -sk -c /tmp/xui_cookie.txt "${API_BASE}/login" \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "username=${XUI_USER}&password=${XUI_PASS}" >/dev/null 2>&1
+api_login_with_retry() {
+    for attempt in 1 2 3; do
+        if api_login; then
+            return 0
+        fi
+        if [[ $attempt -lt 3 ]]; then
+            print_info "${L[api_retry]} ($attempt/3)"
+            systemctl restart x-ui 2>/dev/null || true
+            sleep 5
+        fi
+    done
+    print_error "${L[api_login_failed]}"
+    return 1
 }
 
 api_set_language() {
-    local lang_code
-    if [[ "$LANG_CHOICE" == "ru" ]]; then
-        lang_code="ru"
-    else
-        lang_code="en"
-    fi
+    local lang_code="en"
+    [[ "$LANG_CHOICE" == "ru" ]] && lang_code="ru"
 
-    # Set panel language via settings API
     curl -sk -b /tmp/xui_cookie.txt "${API_BASE}/panel/setting/update" \
         -H "Content-Type: application/json" \
-        -d "{\"webLang\": \"${lang_code}\"}" >/dev/null 2>&1
+        -d "{\"webLang\": \"${lang_code}\"}" >/dev/null 2>&1 || true
 }
 
 api_create_inbound() {
-    local host
-    if [[ "$MODE" == "domain" ]]; then
-        host="$DOMAIN"
-    else
-        host="$SERVER_IP"
-    fi
+    local host="$SERVER_IP"
+    [[ "$MODE" == "domain" ]] && host="$DOMAIN"
 
-    # Get cert paths
+    # Certificate paths
     if [[ "$MODE" == "domain" ]]; then
         CERT_PATH="/root/cert/${DOMAIN}/fullchain.pem"
         KEY_PATH="/root/cert/${DOMAIN}/privkey.pem"
 
-        # Wait for certs if they don't exist yet
-        for i in $(seq 1 30); do
-            if [[ -f "$CERT_PATH" ]] && [[ -f "$KEY_PATH" ]]; then
-                break
-            fi
-            # Check alternative paths
+        # Wait for certs
+        local cert_wait=0
+        while [[ $cert_wait -lt 60 ]]; do
+            if [[ -f "$CERT_PATH" ]] && [[ -f "$KEY_PATH" ]]; then break; fi
             if [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]]; then
                 CERT_PATH="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
                 KEY_PATH="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
                 break
             fi
             sleep 2
+            cert_wait=$((cert_wait + 2))
         done
+
+        if [[ ! -f "$CERT_PATH" ]]; then
+            print_warning "Certificate not found, panel will use self-signed."
+            CERT_PATH=""
+            KEY_PATH=""
+        fi
     else
-        # Self-signed certs generated by 3x-ui
         CERT_PATH=""
         KEY_PATH=""
     fi
 
-    # Generate clients JSON
-    local clients_json="["
+    # Generate names
     local names
     names=$(generate_random_names 10)
     local name_array=()
     while IFS= read -r line; do
-        name_array+=("$line")
+        [[ -n "$line" ]] && name_array+=("$line")
     done <<< "$names"
 
     USER_NAMES=("${name_array[@]}")
     USER_UUIDS=()
 
+    # Build clients JSON via python3 for safe escaping
+    local clients_arr=""
     for i in $(seq 0 9); do
         local uuid
         uuid=$(cat /proc/sys/kernel/random/uuid)
         USER_UUIDS+=("$uuid")
+        local sub_id
+        sub_id=$(head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
 
-        if [[ $i -gt 0 ]]; then
-            clients_json+=","
-        fi
-        clients_json+="{
-            \"id\": \"${uuid}\",
-            \"flow\": \"xtls-rprx-vision\",
-            \"email\": \"${name_array[$i]}\",
-            \"limitIp\": 0,
-            \"totalGB\": 0,
-            \"expiryTime\": 0,
-            \"enable\": true,
-            \"tgId\": \"\",
-            \"subId\": \"$(head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)\",
-            \"reset\": 0
-        }"
+        [[ $i -gt 0 ]] && clients_arr+=","
+        clients_arr+="{\"id\":\"${uuid}\",\"flow\":\"xtls-rprx-vision\",\"email\":\"${name_array[$i]}\",\"limitIp\":0,\"totalGB\":0,\"expiryTime\":0,\"enable\":true,\"tgId\":\"\",\"subId\":\"${sub_id}\",\"reset\":0}"
     done
-    clients_json+="]"
 
-    # Build stream settings
-    local stream_settings
-    if [[ "$MODE" == "domain" ]]; then
-        stream_settings="{
-            \"network\": \"tcp\",
-            \"security\": \"tls\",
-            \"tlsSettings\": {
-                \"serverName\": \"${DOMAIN}\",
-                \"minVersion\": \"1.2\",
-                \"maxVersion\": \"1.3\",
-                \"cipherSuites\": \"\",
-                \"rejectUnknownSni\": false,
-                \"disableSystemRoot\": false,
-                \"enableSessionResumption\": false,
-                \"certificates\": [{
-                    \"certificateFile\": \"${CERT_PATH}\",
-                    \"keyFile\": \"${KEY_PATH}\",
-                    \"ocspStapling\": 3600
-                }],
-                \"alpn\": [\"h2\", \"http/1.1\"],
-                \"settings\": {
-                    \"allowInsecure\": false,
-                    \"fingerprint\": \"chrome\"
-                }
-            },
-            \"tcpSettings\": {
-                \"acceptProxyProtocol\": false,
-                \"header\": {\"type\": \"none\"}
-            }
-        }"
-    else
-        stream_settings="{
-            \"network\": \"tcp\",
-            \"security\": \"tls\",
-            \"tlsSettings\": {
-                \"serverName\": \"\",
-                \"minVersion\": \"1.2\",
-                \"maxVersion\": \"1.3\",
-                \"cipherSuites\": \"\",
-                \"rejectUnknownSni\": false,
-                \"disableSystemRoot\": false,
-                \"enableSessionResumption\": false,
-                \"certificates\": [{
-                    \"certificateFile\": \"\",
-                    \"keyFile\": \"\",
-                    \"ocspStapling\": 3600
-                }],
-                \"alpn\": [\"h2\", \"http/1.1\"],
-                \"settings\": {
-                    \"allowInsecure\": true,
-                    \"fingerprint\": \"chrome\"
-                }
-            },
-            \"tcpSettings\": {
-                \"acceptProxyProtocol\": false,
-                \"header\": {\"type\": \"none\"}
-            }
-        }"
-    fi
+    # Use python3 to build the payload safely (no triple-quote injection risk)
+    local tls_sni="$host"
+    local allow_insecure="false"
+    local cert_file="${CERT_PATH}"
+    local key_file="${KEY_PATH}"
+    [[ "$MODE" == "ip" ]] && allow_insecure="true" && tls_sni=""
 
-    # Sniffing settings
-    local sniffing="{
-        \"enabled\": true,
-        \"destOverride\": [\"http\", \"tls\", \"quic\", \"fakedns\"],
-        \"metadataOnly\": false,
-        \"routeOnly\": false
-    }"
+    python3 -c "
+import json, sys
 
-    local inbound_json="{
-        \"up\": 0,
-        \"down\": 0,
-        \"total\": 0,
-        \"remark\": \"VLESS-TCP-XTLS\",
-        \"enable\": true,
-        \"expiryTime\": 0,
-        \"listen\": \"\",
-        \"port\": 443,
-        \"protocol\": \"vless\",
-        \"settings\": \"{ \\\"clients\\\": $(echo "$clients_json" | sed 's/"/\\"/g'), \\\"decryption\\\": \\\"none\\\", \\\"fallbacks\\\": [{\\\"dest\\\": 80}] }\",
-        \"streamSettings\": \"$(echo "$stream_settings" | tr -d '\n' | sed 's/"/\\"/g')\",
-        \"tag\": \"inbound-443\",
-        \"sniffing\": \"$(echo "$sniffing" | tr -d '\n' | sed 's/"/\\"/g')\"
-    }"
+clients = json.loads('[${clients_arr}]')
 
-    # Use the simpler direct approach - write to DB
-    # First, let's use the API properly
-
-    # Build properly escaped JSON for API
-    local settings_escaped
-    settings_escaped=$(cat << SETEOF
-{
-    "clients": $(echo "$clients_json"),
-    "decryption": "none",
-    "fallbacks": [{"dest": 80}]
-}
-SETEOF
-    )
-
-    local stream_escaped
-    stream_escaped=$(echo "$stream_settings")
-
-    local sniffing_escaped
-    sniffing_escaped=$(echo "$sniffing")
-
-    # Create the inbound via API
-    local payload
-    payload=$(python3 -c "
-import json
-
-clients = json.loads('''$(echo "$clients_json")''')
-
-settings = {
+settings = json.dumps({
     'clients': clients,
     'decryption': 'none',
     'fallbacks': [{'dest': 80}]
-}
+})
 
-stream = json.loads('''$(echo "$stream_settings")''')
+stream = json.dumps({
+    'network': 'tcp',
+    'security': 'tls',
+    'tlsSettings': {
+        'serverName': '${tls_sni}',
+        'minVersion': '1.2',
+        'maxVersion': '1.3',
+        'cipherSuites': '',
+        'rejectUnknownSni': False,
+        'disableSystemRoot': False,
+        'enableSessionResumption': False,
+        'certificates': [{'certificateFile': '${cert_file}', 'keyFile': '${key_file}', 'ocspStapling': 3600}],
+        'alpn': ['h2', 'http/1.1'],
+        'settings': {'allowInsecure': ${allow_insecure}, 'fingerprint': 'chrome'}
+    },
+    'tcpSettings': {'acceptProxyProtocol': False, 'header': {'type': 'none'}}
+})
 
-sniffing = {
+sniffing = json.dumps({
     'enabled': True,
     'destOverride': ['http', 'tls', 'quic', 'fakedns'],
     'metadataOnly': False,
     'routeOnly': False
-}
+})
 
 payload = {
-    'up': 0,
-    'down': 0,
-    'total': 0,
+    'up': 0, 'down': 0, 'total': 0,
     'remark': 'VLESS-TCP-XTLS',
-    'enable': True,
-    'expiryTime': 0,
-    'listen': '',
-    'port': 443,
-    'protocol': 'vless',
-    'settings': json.dumps(settings),
-    'streamSettings': json.dumps(stream),
+    'enable': True, 'expiryTime': 0,
+    'listen': '', 'port': 443, 'protocol': 'vless',
+    'settings': settings,
+    'streamSettings': stream,
     'tag': 'inbound-443',
-    'sniffing': json.dumps(sniffing)
+    'sniffing': sniffing
 }
 
-print(json.dumps(payload))
-")
+json.dump(payload, open('/tmp/xuifast_payload.json', 'w'))
+" || { print_error "${L[inbound_failed]}"; return 1; }
 
-    curl -sk -b /tmp/xui_cookie.txt "${API_BASE}/panel/api/inbounds/add" \
+    local http_code
+    http_code=$(curl -sk -w '%{http_code}' -o /dev/null \
+        -b /tmp/xui_cookie.txt "${API_BASE}/panel/api/inbounds/add" \
         -H "Content-Type: application/json" \
-        -d "$payload" >/dev/null 2>&1
+        -d @/tmp/xuifast_payload.json 2>/dev/null)
 
-    print_success "${L[configuring_vless]}"
+    rm -f /tmp/xuifast_payload.json
+
+    if [[ "$http_code" != "200" ]]; then
+        print_error "${L[inbound_failed]} (HTTP $http_code)"
+        return 1
+    fi
+
+    # Save user data for recovery
+    {
+        echo ""
+        echo "# VPN Users"
+        for i in $(seq 0 9); do
+            echo "USER_${i}=${USER_NAMES[$i]}|${USER_UUIDS[$i]}"
+        done
+    } >> "$CREDS_FILE"
+
+    return 0
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -960,20 +959,13 @@ print(json.dumps(payload))
 generate_vless_link() {
     local uuid="$1"
     local name="$2"
-    local host
+    local host="$SERVER_IP"
+    [[ "$MODE" == "domain" ]] && host="$DOMAIN"
 
-    if [[ "$MODE" == "domain" ]]; then
-        host="$DOMAIN"
-        echo "vless://${uuid}@${host}:443?type=tcp&security=tls&sni=${host}&fp=chrome&flow=xtls-rprx-vision#${name}"
-    else
-        host="$SERVER_IP"
-        echo "vless://${uuid}@${host}:443?type=tcp&security=tls&sni=${host}&fp=chrome&flow=xtls-rprx-vision&allowInsecure=1#${name}"
-    fi
-}
-
-show_qr() {
-    local data="$1"
-    qrencode -t ANSIUTF8 "$data"
+    local link="vless://${uuid}@${host}:443?type=tcp&security=tls&sni=${host}&fp=chrome&flow=xtls-rprx-vision"
+    [[ "$MODE" == "ip" ]] && link+="&allowInsecure=1"
+    link+="#${name}"
+    echo "$link"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -982,28 +974,35 @@ show_qr() {
 
 check_client_online() {
     local email="$1"
-    local timeout=180  # 3 minutes
+    local timeout=120
     local elapsed=0
-    local check_interval=5
+
+    echo ""
+    printf "  ${DIM}${L[skip_hint]}${RESET}\n"
+    echo ""
 
     while [[ $elapsed -lt $timeout ]]; do
-        local response
-        response=$(curl -sk -b /tmp/xui_cookie.txt "${API_BASE}/panel/api/inbounds/onlines" 2>/dev/null)
+        # Check if user pressed Enter (non-blocking read)
+        if read -t 0.1 -r 2>/dev/null; then
+            return 2  # skipped
+        fi
 
-        if echo "$response" | grep -q "$email"; then
+        local response
+        response=$(curl -sk -b /tmp/xui_cookie.txt "${API_BASE}/panel/api/inbounds/onlines" 2>/dev/null || true)
+
+        if [[ -n "$response" ]] && echo "$response" | grep -q "$email" 2>/dev/null; then
             return 0
         fi
 
-        # Animated waiting
         local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-        for ((f=0; f<check_interval*10; f++)); do
+        for ((f=0; f<50; f++)); do
             local frame_idx=$(( f % ${#frames[@]} ))
             local remaining=$(( timeout - elapsed ))
-            printf "\r  ${CYAN}${frames[$frame_idx]}${RESET} ${L[waiting_online]} ${DIM}(${remaining}s)${RESET}  "
+            printf "\r  ${CYAN}${frames[$frame_idx]}${RESET} ${L[waiting_online]} ${DIM}(%ds)${RESET}  " "$remaining"
             sleep 0.1
         done
 
-        elapsed=$((elapsed + check_interval))
+        elapsed=$((elapsed + 5))
     done
 
     printf "\n"
@@ -1015,76 +1014,75 @@ check_client_online() {
 # ─────────────────────────────────────────────────────────────────────────────────
 
 show_credentials() {
-    clear
     echo ""
     printf "  ${GREEN}╔"
     printf '═%.0s' $(seq 1 58)
     printf "╗${RESET}\n"
 
-    local title="${L[install_complete]}"
-    local pad=$(( (58 - ${#title}) / 2 ))
-    printf "  ${GREEN}║${RESET}"
-    printf '%*s' $pad ''
-    printf "${BOLD}${WHITE}%s${RESET}" "$title"
-    printf '%*s' $(( 58 - pad - ${#title} )) ''
-    printf "${GREEN}║${RESET}\n"
+    printf "  ${GREEN}║${RESET}  ${BOLD}${WHITE}%-56s${RESET}${GREEN}║${RESET}\n" "${L[install_complete]}"
+    printf "  ${GREEN}║${RESET}  ${BOLD}${WHITE}%-56s${RESET}${GREEN}║${RESET}\n" "${L[login_title]}"
 
     printf "  ${GREEN}╠"
     printf '═%.0s' $(seq 1 58)
     printf "╣${RESET}\n"
 
-    printf "  ${GREEN}║${RESET}  👤 ${WHITE}%-18s${RESET} ${BOLD}%-30s${RESET}${GREEN}║${RESET}\n" "${L[username]}:" "$XUI_USER"
-    printf "  ${GREEN}║${RESET}  🔑 ${WHITE}%-18s${RESET} ${BOLD}%-30s${RESET}${GREEN}║${RESET}\n" "${L[password]}:" "$XUI_PASS"
-    printf "  ${GREEN}║${RESET}  🔌 ${WHITE}%-18s${RESET} ${YELLOW}%-30s${RESET}${GREEN}║${RESET}\n" "${L[port]}:" "$XUI_PORT"
-    printf "  ${GREEN}║${RESET}  📁 ${WHITE}%-18s${RESET} %-30s${GREEN}║${RESET}\n" "${L[panel_path]}:" "/${XUI_PATH}/"
-    printf "  ${GREEN}║${RESET}  🌐 ${WHITE}%-18s${RESET} ${GREEN}${UNDERLINE}%-30s${RESET}${GREEN}║${RESET}\n" "${L[login_url]}:" ""
-    printf "  ${GREEN}║${RESET}     ${GREEN}${UNDERLINE}%-52s${RESET}${GREEN}║${RESET}\n" "$XUI_URL"
+    printf "  ${GREEN}║${RESET}  👤 %-16s ${BOLD}%-33s${RESET}${GREEN}║${RESET}\n" "${L[username]}:" "${XUI_USER}"
+    printf "  ${GREEN}║${RESET}  🔑 %-16s ${BOLD}%-33s${RESET}${GREEN}║${RESET}\n" "${L[password]}:" "${XUI_PASS}"
+    printf "  ${GREEN}║${RESET}  🔌 %-16s ${YELLOW}%-33s${RESET}${GREEN}║${RESET}\n" "${L[port]}:" "${XUI_PORT}"
+    printf "  ${GREEN}║${RESET}  📁 %-16s %-33s${GREEN}║${RESET}\n" "${L[panel_path]}:" "/${XUI_PATH}/"
+    printf "  ${GREEN}║${RESET}  🌐 %-16s ${RESET}${GREEN}║${RESET}\n" "${L[login_url]}:"
+    printf "  ${GREEN}║${RESET}  ${GREEN}${UNDERLINE}%-56s${RESET}${GREEN}║${RESET}\n" "${XUI_URL}"
 
     printf "  ${GREEN}╠"
     printf '═%.0s' $(seq 1 58)
     printf "╣${RESET}\n"
 
-    printf "  ${GREEN}║${RESET}  ${YELLOW}⚠  ${BOLD}%-51s${RESET}${GREEN}║${RESET}\n" "${L[save_warning]}"
+    printf "  ${GREEN}║${RESET}  ${CYAN}%-56s${RESET}${GREEN}║${RESET}\n" "${L[how_to_login]}"
 
     printf "  ${GREEN}╠"
     printf '═%.0s' $(seq 1 58)
     printf "╣${RESET}\n"
 
-    printf "  ${GREEN}║${RESET}  ${CYAN}ℹ  ${BOLD}%-51s${RESET}${GREEN}║${RESET}\n" "${L[cert_info]}"
+    printf "  ${GREEN}║${RESET}  ${YELLOW}⚠  ${BOLD}%-53s${RESET}${GREEN}║${RESET}\n" "${L[save_warning]}"
 
-    if [[ "$MODE" == "domain" ]]; then
-        local cert_info="${L[cert_domain_info]}"
-    else
-        local cert_info="${L[cert_ip_info]}"
-    fi
+    printf "  ${GREEN}╠"
+    printf '═%.0s' $(seq 1 58)
+    printf "╣${RESET}\n"
+
+    printf "  ${GREEN}║${RESET}  ${CYAN}ℹ  %-53s${RESET}${GREEN}║${RESET}\n" "${L[cert_info]}"
+
+    local cert_info
+    [[ "$MODE" == "domain" ]] && cert_info="${L[cert_domain_info]}" || cert_info="${L[cert_ip_info]}"
 
     while IFS= read -r line; do
-        printf "  ${GREEN}║${RESET}     %-52s${GREEN}║${RESET}\n" "$line"
+        printf "  ${GREEN}║${RESET}     %-53s${GREEN}║${RESET}\n" "$line"
     done <<< "$(echo -e "$cert_info")"
 
     printf "  ${GREEN}║${RESET}%-58s${GREEN}║${RESET}\n" ""
-    printf "  ${GREEN}║${RESET}  ${GREEN}✅ %-52s${RESET}${GREEN}║${RESET}\n" "${L[ready]}"
+    printf "  ${GREEN}║${RESET}  ${GREEN}✅ %-53s${RESET}${GREEN}║${RESET}\n" "${L[ready]}"
 
     printf "  ${GREEN}╚"
     printf '═%.0s' $(seq 1 58)
     printf "╝${RESET}\n"
+
+    echo ""
+    printf "  ${DIM}$(printf "${L[creds_saved]}" "$CREDS_FILE")${RESET}\n"
     echo ""
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
-#  HAPP / HIDDIFY CLIENT DOWNLOAD
+#  APP DOWNLOAD
 # ─────────────────────────────────────────────────────────────────────────────────
 
 show_app_download() {
     print_header "${L[download_happ]}"
 
+    printf "  ${WHITE}${L[choose_platform]}${RESET}\n\n"
+    printf "    ${CYAN}1)${RESET} 📱  ${L[ios]}\n"
+    printf "    ${CYAN}2)${RESET} 📱  ${L[android]}\n"
     echo ""
-    printf "  ${YELLOW}?${RESET} ${L[choose_platform]}\n"
-    printf "    ${WHITE}1)${RESET} ${L[ios]}\n"
-    printf "    ${WHITE}2)${RESET} ${L[android]}\n"
-    echo ""
-    printf "  ${CYAN}▸${RESET} "
-    read -r platform_choice
+    read_choice "" 1 2
+    local platform_choice="$REPLY"
 
     local app_url_ios="https://apps.apple.com/app/hiddify-proxy-vpn/id6596777532"
     local app_url_android="https://play.google.com/store/apps/details?id=app.hiddify.com"
@@ -1093,12 +1091,10 @@ show_app_download() {
     print_separator
 
     if [[ "$platform_choice" == "1" ]]; then
-        echo ""
-        printf "  ${CYAN}📱 iOS — Hiddify (App Store):${RESET}\n\n"
+        printf "\n  ${CYAN}📱 iOS — Hiddify (App Store):${RESET}\n\n"
         show_qr "$app_url_ios"
     else
-        echo ""
-        printf "  ${CYAN}📱 Android — Hiddify (Google Play):${RESET}\n\n"
+        printf "\n  ${CYAN}📱 Android — Hiddify (Google Play):${RESET}\n\n"
         show_qr "$app_url_android"
     fi
 
@@ -1106,11 +1102,10 @@ show_app_download() {
     print_separator
     echo ""
 
+    printf "  ${DIM}${L[confirm_hint]}${RESET}\n"
     while true; do
         printf "  ${YELLOW}?${RESET} ${L[confirm_installed]} "
-        read -r installed
-        installed=$(echo "$installed" | tr '[:upper:]' '[:lower:]')
-        if [[ "$installed" == "yes" ]] || [[ "$installed" == "y" ]] || [[ "$installed" == "да" ]] || [[ "$installed" == "д" ]]; then
+        if confirm_yes; then
             break
         fi
         print_info "${L[scan_qr_app]}"
@@ -1124,11 +1119,15 @@ show_app_download() {
 # ─────────────────────────────────────────────────────────────────────────────────
 
 test_connection() {
+    # Ensure we have user data
+    if [[ ${#USER_UUIDS[@]} -eq 0 ]] || [[ ${#USER_NAMES[@]} -eq 0 ]]; then
+        print_warning "No user data available for testing."
+        return
+    fi
+
     print_header "${L[test_connection]}"
 
-    echo ""
-    printf "  ${CYAN}${L[scan_qr_config]}${RESET}\n"
-    echo ""
+    printf "  ${CYAN}${L[scan_qr_config]}${RESET}\n\n"
 
     local first_link
     first_link=$(generate_vless_link "${USER_UUIDS[0]}" "${USER_NAMES[0]}")
@@ -1137,17 +1136,25 @@ test_connection() {
 
     echo ""
     print_separator
-    printf "  ${DIM}VLESS link: ${first_link}${RESET}\n"
+    printf "  ${DIM}Link: %s${RESET}\n" "$first_link"
     print_separator
-    echo ""
 
     # Refresh API cookie
-    api_login
+    api_login 2>/dev/null || true
 
-    if check_client_online "${USER_NAMES[0]}"; then
+    local result
+    check_client_online "${USER_NAMES[0]}"
+    result=$?
+
+    if [[ $result -eq 0 ]]; then
         printf "\r  ${GREEN}✓${RESET} ${BOLD}${GREEN}${L[client_online]}${RESET}                              \n"
+    elif [[ $result -eq 2 ]]; then
+        print_info "Skipped."
     else
-        print_warning "${L[client_timeout]}"
+        echo ""
+        printf "  ${DIM}"
+        echo -e "${L[client_timeout]}"
+        printf "${RESET}"
     fi
 }
 
@@ -1156,52 +1163,24 @@ test_connection() {
 # ─────────────────────────────────────────────────────────────────────────────────
 
 show_all_users() {
+    if [[ ${#USER_UUIDS[@]} -eq 0 ]]; then return; fi
+
+    echo ""
+    printf "  ${YELLOW}?${RESET} ${L[show_all_users_q]} [${L[yes]}/${L[no]}]: "
+    if ! confirm_yes; then
+        return
+    fi
+
     print_header "${L[all_users_info]}"
 
-    for i in $(seq 0 9); do
+    for i in $(seq 0 $(( ${#USER_UUIDS[@]} - 1 )) ); do
         local link
         link=$(generate_vless_link "${USER_UUIDS[$i]}" "${USER_NAMES[$i]}")
 
-        printf "  ${WHITE}%2d.${RESET} ${BOLD}${USER_NAMES[$i]}${RESET}\n" "$((i+1))"
-        printf "      ${DIM}UUID: ${USER_UUIDS[$i]}${RESET}\n"
-        printf "      ${DIM}Link: ${link}${RESET}\n"
+        printf "  ${WHITE}%2d.${RESET} ${BOLD}%s${RESET}\n" "$((i+1))" "${USER_NAMES[$i]}"
+        printf "      ${DIM}%s${RESET}\n" "$link"
         echo ""
     done
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  CONFIGURE NGINX AS FALLBACK (TLS termination by xray, HTTP fallback to nginx)
-# ─────────────────────────────────────────────────────────────────────────────────
-
-setup_fallback_nginx() {
-    # Xray will listen on 443 with TLS
-    # Fallback goes to nginx on port 80
-    # Nginx serves the stub site on port 80
-
-    cat > /etc/nginx/sites-available/stub << NGINXEOF
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
-    root /var/www/html;
-    index index.html;
-
-    location / {
-        try_files \$uri \$uri/ =404;
-    }
-
-    # Prevent access logging for health checks
-    location = /favicon.ico {
-        log_not_found off;
-        access_log off;
-    }
-}
-NGINXEOF
-
-    ln -sf /etc/nginx/sites-available/stub /etc/nginx/sites-enabled/
-    rm -f /etc/nginx/sites-enabled/default
-    nginx -t >/dev/null 2>&1
-    systemctl restart nginx 2>/dev/null
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -1210,18 +1189,17 @@ NGINXEOF
 
 main() {
     # ── Root check ──
-    if [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}✗${RESET} ${L[error_root]:-Run as root!}"
+    if [[ "$EUID" -ne 0 ]]; then
+        echo -e "\n  ${RED}✗${RESET}  Run as root: ${BOLD}sudo bash xuifast.sh${RESET}\n"
         exit 1
     fi
 
     clear
 
-    # ╔═══════════════════════════════════════╗
-    # ║     WELCOME SCREEN & LANG SELECT      ║
-    # ╚═══════════════════════════════════════╝
+    # ╔═══════════════════════════════╗
+    # ║   WELCOME & LANG SELECT       ║
+    # ╚═══════════════════════════════╝
 
-    echo ""
     echo ""
     printf "${PURPLE}"
     cat << 'BANNER'
@@ -1233,19 +1211,15 @@ main() {
     ╚═╝  ╚═╝ ╚═════╝ ╚═╝╚═╝     ╚═╝  ╚═╝╚══════╝   ╚═╝
 BANNER
     printf "${RESET}"
-    echo ""
-    printf "  ${DIM}──────────── 3X-UI Professional Installer v2.0 ────────────${RESET}\n"
-    echo ""
-    echo ""
+    printf "\n  ${DIM}──────────── 3X-UI Professional Installer v2.1 ────────────${RESET}\n\n"
 
     printf "  ${WHITE}Выберите язык / Choose language:${RESET}\n\n"
     printf "    ${CYAN}1)${RESET} 🇷🇺  Русский\n"
     printf "    ${CYAN}2)${RESET} 🇬🇧  English\n"
     echo ""
-    printf "  ${CYAN}▸${RESET} "
-    read -r lang_input
+    read_choice "" 1 2
 
-    if [[ "$lang_input" == "1" ]] || [[ "$lang_input" == "ru" ]]; then
+    if [[ "$REPLY" == "1" ]]; then
         LANG_CHOICE="ru"
         set_lang_ru
     else
@@ -1257,35 +1231,46 @@ BANNER
     echo ""
 
     # ── Get server IP ──
-    SERVER_IP=$(curl -s --max-time 10 ifconfig.me 2>/dev/null || curl -s --max-time 10 api.ipify.org 2>/dev/null || curl -s --max-time 10 icanhazip.com 2>/dev/null)
+    SERVER_IP=$(curl -s --max-time 10 ifconfig.me 2>/dev/null || \
+                curl -s --max-time 10 api.ipify.org 2>/dev/null || \
+                curl -s --max-time 10 icanhazip.com 2>/dev/null || echo "")
+    SERVER_IP=$(echo "$SERVER_IP" | tr -d '[:space:]')
 
-    # ╔═══════════════════════════════════════╗
-    # ║        MODE SELECTION                  ║
-    # ╚═══════════════════════════════════════╝
+    if [[ -z "$SERVER_IP" ]]; then
+        print_error "Cannot detect server IP. Check internet connection."
+        exit 1
+    fi
+
+    # ╔═══════════════════════════════╗
+    # ║     MODE SELECTION             ║
+    # ╚═══════════════════════════════╝
 
     print_header "${L[choose_mode]}"
 
     printf "    ${CYAN}1)${RESET} 🌐  ${L[mode_ip]}\n"
+    printf "       ${DIM}${L[mode_ip_hint]}${RESET}\n\n"
     printf "    ${CYAN}2)${RESET} 🔒  ${L[mode_domain]}\n"
+    printf "       ${DIM}${L[mode_domain_hint]}${RESET}\n"
     echo ""
-    printf "  ${CYAN}▸${RESET} "
-    read -r mode_input
+    read_choice "" 1 2
 
-    if [[ "$mode_input" == "2" ]]; then
+    if [[ "$REPLY" == "2" ]]; then
         MODE="domain"
         echo ""
-        printf "  ${CYAN}▸${RESET} ${L[enter_domain]}: "
-        read -r DOMAIN
-
-        # Strip protocol if user added it
-        DOMAIN=$(echo "$DOMAIN" | sed 's|https\?://||' | sed 's|/.*||')
+        # Domain input with validation
+        while true; do
+            printf "  ${CYAN}▸${RESET} ${L[enter_domain]}: "
+            read -r DOMAIN
+            DOMAIN=$(echo "$DOMAIN" | sed 's|https\?://||' | sed 's|/.*||' | tr -d '[:space:]')
+            if [[ -n "$DOMAIN" ]] && [[ "$DOMAIN" == *.* ]]; then
+                break
+            fi
+            print_warning "${L[domain_empty]}"
+        done
 
         echo ""
         if ! check_dns "$DOMAIN"; then
             print_error "${L[domain_fail]}"
-            echo ""
-            printf "  ${DIM}%s${RESET}\n" "$([ "$LANG_CHOICE" == "ru" ] && echo "Направьте домен A-записью на IP: $SERVER_IP и запустите скрипт снова." || echo "Point your domain A record to IP: $SERVER_IP and run the script again.")"
-            echo ""
             exit 1
         fi
     else
@@ -1294,99 +1279,105 @@ BANNER
 
     echo ""
 
-    # ╔═══════════════════════════════════════╗
-    # ║        ALREADY INSTALLED CHECK         ║
-    # ╚═══════════════════════════════════════╝
+    # ╔═══════════════════════════════╗
+    # ║   ALREADY INSTALLED CHECK      ║
+    # ╚═══════════════════════════════╝
 
-    if [ -f "/usr/local/x-ui/x-ui" ]; then
+    if [[ -f "/usr/local/x-ui/x-ui" ]]; then
         print_warning "${L[already_installed]}"
-        extract_credentials
-        show_credentials
+        if extract_credentials; then
+            show_credentials
+        fi
         exit 0
     fi
 
-    # ╔═══════════════════════════════════════╗
-    # ║        INSTALLATION                    ║
-    # ╚═══════════════════════════════════════╝
+    # ╔═══════════════════════════════╗
+    # ║       INSTALLATION             ║
+    # ╚═══════════════════════════════╝
 
-    # ── Step 1: Dependencies ──
-    print_info "${L[installing_deps]}"
+    # Step 1: Dependencies
     (
         export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq
-        apt-get install -y -qq expect qrencode curl sqlite3 dnsutils nginx python3 git > /dev/null 2>&1
+        apt-get update -qq 2>/dev/null
+        apt-get install -y -qq expect qrencode curl sqlite3 dnsutils nginx python3 git 2>/dev/null
     ) &
-    spinner $! "${L[installing_deps]}"
+    spinner $! "${L[installing_deps]}" || {
+        print_error "Dependencies installation failed"
+        exit 1
+    }
 
-    # ── Step 2: Deploy stub site ──
-    print_info "${L[deploying_stub]}"
+    # Step 2: Deploy stub site
     deploy_stub_site
 
-    # ── Step 3: Setup nginx for stub ──
+    # Step 3: Setup nginx
     setup_nginx
 
-    # ── Step 4: Install 3x-ui ──
+    # Step 4: Install 3x-ui (with progress message)
+    print_info "${L[installing_xui]}"
     install_3xui
+    print_success "3X-UI installed"
 
-    # ── Step 5: Extract credentials ──
-    extract_credentials
+    # Step 5: Extract credentials
+    if ! extract_credentials; then
+        exit 1
+    fi
 
-    # ── Step 6: Wait for panel to be ready ──
-    sleep 3
-
-    # ── Step 7: API login & configure ──
+    # Step 6: Wait for API
     print_info "${L[configuring_vless]}"
+    if ! wait_for_api; then
+        print_warning "${L[api_login_failed]}"
+        systemctl restart x-ui 2>/dev/null || true
+        sleep 5
+        wait_for_api || true
+    fi
 
-    api_login
+    # Step 7: API login & configure
+    if api_login_with_retry; then
+        api_set_language
+        print_success "${L[panel_lang_set]}: $([ "$LANG_CHOICE" == "ru" ] && echo "Русский" || echo "English")"
+    fi
 
-    # Set language
-    api_set_language
-    print_success "${L[panel_lang_set]}"
-
-    # ── Step 8: Reconfigure nginx as fallback (port 80 only) ──
+    # Step 8: Reconfigure nginx as fallback
     setup_fallback_nginx
 
-    # ── Step 9: Create VLESS inbound with 10 users ──
+    # Step 9: Create VLESS inbound with 10 users
     print_info "${L[creating_users]}"
-    api_create_inbound
-    print_success "10 ${L[users_created]}"
+    if api_create_inbound; then
+        print_success "10 ${L[users_created]}"
+    fi
 
-    # ╔═══════════════════════════════════════╗
-    # ║        RESULTS                         ║
-    # ╚═══════════════════════════════════════╝
+    # ╔═══════════════════════════════╗
+    # ║         RESULTS                ║
+    # ╚═══════════════════════════════╝
 
     show_credentials
     wait_enter
 
-    # ── App download ──
+    # App download
     show_app_download
 
-    # ── Connection test ──
+    # Connection test
     test_connection
 
-    # ── Final message ──
+    # Final
     echo ""
     print_separator
-    echo ""
-    printf "  ${GREEN}${BOLD}"
+    printf "\n  ${GREEN}${BOLD}"
     echo -e "${L[final_message]}"
-    printf "${RESET}"
-    echo ""
+    printf "${RESET}\n"
     print_separator
 
-    # ── Show all users ──
+    # Optional: show all users
     show_all_users
 
-    # ── Duplicate credentials ──
+    # Repeat credentials one last time
     echo ""
     show_credentials
 
-    # ── Cleanup ──
+    # Cleanup
     rm -f /tmp/xui_cookie.txt
 
-    echo ""
-    printf "  ${DIM}$([ "$LANG_CHOICE" == "ru" ] && echo "Скрипт завершён. Удачи!" || echo "Script completed. Good luck!")${RESET}\n"
-    echo ""
+    printf "  ${DIM}$([ "$LANG_CHOICE" == "ru" ] && echo "Скрипт завершён. Удачи!" || echo "Done. Good luck!")${RESET}\n\n"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
