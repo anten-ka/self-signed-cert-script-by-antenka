@@ -872,10 +872,10 @@ api_create_inbound() {
 
     # Use python3 to build the payload safely (no triple-quote injection risk)
     local tls_sni="$host"
-    local allow_insecure="false"
+    local allow_insecure="False"
     local cert_file="${CERT_PATH}"
     local key_file="${KEY_PATH}"
-    [[ "$MODE" == "ip" ]] && allow_insecure="true" && tls_sni=""
+    [[ "$MODE" == "ip" ]] && allow_insecure="True" && tls_sni=""
 
     python3 -c "
 import json, sys
