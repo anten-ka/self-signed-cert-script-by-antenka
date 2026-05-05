@@ -192,6 +192,7 @@ I18N[backup_restored]="Backup restored"
 I18N[err_need_root]="Run the script with sudo / as root"
 I18N[err_os_unknown]="Failed to detect OS. Linux required."
 I18N[err_low_disk]="Low disk space: %sMB (need %sMB+)"
+I18N[lite_nginx_optional_fail]="Stub nginx setup failed (non-critical, VPN still works)"
 I18N[bye]="See you later! 👋"
 
 # ── Completion ─────────────────────────────────────────────────────────

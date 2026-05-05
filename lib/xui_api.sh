@@ -137,7 +137,7 @@ api_create_reality_inbound() {
     [ -n "$REALITY_PUBLIC_KEY" ] || { log_error "Reality public key not set"; return 1; }
 
     # Build the payload using Python (injection-safe)
-    python3 - "$mask_domain" "$REALITY_PRIVATE_KEY" "$REALITY_PUBLIC_KEY" << 'PYEOF'
+    if ! python3 - "$mask_domain" "$REALITY_PRIVATE_KEY" "$REALITY_PUBLIC_KEY" << 'PYEOF'
 import json, sys
 
 mask_domain = sys.argv[1]
@@ -210,8 +210,7 @@ payload = {
 with open('/tmp/xuifast_payload.json', 'w') as f:
     json.dump(payload, f)
 PYEOF
-
-    if [ $? -ne 0 ]; then
+    then
         log_error "Failed to build Reality payload"
         return 1
     fi
@@ -250,7 +249,7 @@ api_create_tls_inbound() {
     # Validate prerequisites
     [ -f /tmp/xuifast_clients.json ] || { log_error "Clients file not found"; return 1; }
 
-    python3 - "$domain" "$cert_file" "$key_file" << 'PYEOF'
+    if ! python3 - "$domain" "$cert_file" "$key_file" << 'PYEOF'
 import json, sys
 
 domain = sys.argv[1]
@@ -324,8 +323,7 @@ payload = {
 with open('/tmp/xuifast_payload.json', 'w') as f:
     json.dump(payload, f)
 PYEOF
-
-    if [ $? -ne 0 ]; then
+    then
         log_error "Failed to build TLS payload"
         return 1
     fi
@@ -373,7 +371,7 @@ generate_clients() {
     # Build JSON array with Python
     local flow="xtls-rprx-vision"
 
-    python3 - "$mode" "$flow" "${names[@]}" << 'PYEOF'
+    if ! python3 - "$mode" "$flow" "${names[@]}" << 'PYEOF'
 import json, sys, uuid
 
 mode = sys.argv[1]
@@ -407,8 +405,7 @@ mapping = {c["email"]: c["id"] for c in clients}
 with open('/tmp/xuifast_users_map.json', 'w') as f:
     json.dump(mapping, f)
 PYEOF
-
-    if [ $? -ne 0 ]; then
+    then
         log_error "Failed to generate clients"
         return 1
     fi
@@ -460,11 +457,15 @@ p = json.load(open('/tmp/xuifast_payload.json'))
 ss = json.loads(p['streamSettings'])
 sids = ss.get('realitySettings', {}).get('shortIds', [])
 print(sids[0] if sids else '')
-" 2>/dev/null)
+" 2>/dev/null || true)
+    fi
+
+    if [ "$mode" = "lite" ] && [ -z "$short_id" ]; then
+        log_warning "Empty short_id — VLESS links may not work"
     fi
 
     # Generate links
-    python3 - "$mode" "$server" "$mask_domain" "${REALITY_PUBLIC_KEY:-}" "$short_id" << 'PYEOF'
+    if ! python3 - "$mode" "$server" "$mask_domain" "${REALITY_PUBLIC_KEY:-}" "$short_id" << 'PYEOF'
 import json, sys
 from urllib.parse import quote
 
@@ -502,6 +503,10 @@ for name, uuid in users.items():
 with open('/tmp/xuifast_links.json', 'w') as f:
     json.dump(links, f, indent=2)
 PYEOF
+    then
+        log_error "Failed to generate VLESS links"
+        return 1
+    fi
 
     log_success "VLESS links generated"
 }

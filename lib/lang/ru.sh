@@ -192,6 +192,7 @@ I18N[backup_restored]="Бекап восстановлен"
 I18N[err_need_root]="Запустите скрипт с sudo / от root"
 I18N[err_os_unknown]="Не удалось определить ОС. Требуется Linux."
 I18N[err_low_disk]="Мало места на диске: %sMB (нужно %sMB+)"
+I18N[lite_nginx_optional_fail]="Не удалось настроить stub-сайт nginx (не критично, VPN работает)"
 I18N[bye]="До встречи! 👋"
 
 # ── Completion ─────────────────────────────────────────────────────────

@@ -124,12 +124,12 @@ EONGINX
 generate_nginx_temp_config() {
     local domain="$1"
 
-    cat > "$NGINX_SITE_CONF" << EONGINX_TEMP
+    cat > "$NGINX_SITE_CONF" << 'EONGINX_TEMP'
 # XUIFAST — temporary config for SSL certificate
 server {
     listen 80;
     listen [::]:80;
-    server_name ${domain};
+    server_name DOMAIN_PLACEHOLDER;
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
@@ -140,10 +140,14 @@ server {
     index index.html;
 
     location / {
-        try_files \$uri \$uri/ =404;
+        try_files $uri $uri/ =404;
     }
 }
 EONGINX_TEMP
+
+    local escaped_domain
+    escaped_domain=$(printf '%s\n' "$domain" | sed 's/[|&/\]/\\&/g')
+    sed -i "s|DOMAIN_PLACEHOLDER|${escaped_domain}|g" "$NGINX_SITE_CONF"
 
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null
     ln -sf "$NGINX_SITE_CONF" "$NGINX_SITE_LINK"
@@ -164,7 +168,10 @@ obtain_ssl_certificate() {
 
     # Temp config for ACME
     generate_nginx_temp_config "$domain"
-    systemctl restart nginx 2>/dev/null
+    if ! systemctl restart nginx 2>/dev/null; then
+        log_error "Failed to restart nginx for ACME challenge"
+        return 1
+    fi
 
     local certbot_args=(
         certonly --webroot

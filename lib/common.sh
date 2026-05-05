@@ -3,7 +3,7 @@
 # Colors, logging, spinner, apt handling, IP/geo detection, JSON config
 
 # ── Version & paths ─────────────────────────────────────────────────────
-XUIFAST_VERSION="3.0.0"
+XUIFAST_VERSION="3.0.2"
 XUIFAST_DIR="${XUIFAST_DIR:-/opt/xuifast}"
 XUIFAST_CONFIG="${XUIFAST_CONFIG:-${XUIFAST_DIR}/config.json}"
 XUI_DIR="/usr/local/x-ui"
@@ -49,7 +49,7 @@ start_spinner() {
         while true; do
             printf "\r  ${CYAN}%s${NC}  %s" "${SPINNER_FRAMES[$((i % ${#SPINNER_FRAMES[@]}))]}" "$msg" >&2
             sleep 0.1
-            ((i++))
+            ((i++)) || true
         done
     ) &
     SPINNER_PID=$!
@@ -184,7 +184,7 @@ install_dependencies() {
 
     if [ ${#missing[@]} -gt 0 ]; then
         log_info "$(tf deps_installing "${missing[*]}")"
-        apt_update
+        apt_update || { log_error "apt-get update failed"; return 1; }
         apt_install "${missing[@]}" || {
             log_error "Failed to install: ${missing[*]}"
             return 1
@@ -369,7 +369,11 @@ check_disk_space() {
     local required_mb="${1:-500}"
     local available_mb
     available_mb=$(df -m / 2>/dev/null | awk 'NR==2 {print $4}')
-    if [ -n "$available_mb" ] && [ "$available_mb" -lt "$required_mb" ]; then
+    if [ -z "$available_mb" ]; then
+        log_warning "Cannot determine disk space"
+        return 0
+    fi
+    if [ "$available_mb" -lt "$required_mb" ]; then
         return 1
     fi
     return 0
@@ -377,7 +381,7 @@ check_disk_space() {
 
 # ── Cleanup trap helper ────────────────────────────────────────────────
 cleanup_temp_files() {
-    rm -f /tmp/xuifast_*.json /tmp/xuifast_*.txt 2>/dev/null
+    rm -f /tmp/xuifast_*.json /tmp/xuifast_*.txt /tmp/xuifast_*.log 2>/dev/null
     rm -rf /tmp/xuifast_clone_* 2>/dev/null
     stop_spinner
 }

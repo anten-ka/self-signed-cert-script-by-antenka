@@ -109,14 +109,17 @@ save_credentials() {
     local ip
     ip=$(get_server_ip)
 
+    local mode
+    mode=$(config_get mode "lite") || mode="lite"
+
     cat > "$CREDENTIALS_FILE" << CREDS
 # XUIFAST credentials — $(date -Iseconds)
-USERNAME=$XUI_USER
-PASSWORD=$XUI_PASS
-PORT=$XUI_PORT
-WEB_PATH=$XUI_WEB_PATH
+USERNAME=${XUI_USER}
+PASSWORD=${XUI_PASS}
+PORT=${XUI_PORT}
+WEB_PATH=${XUI_WEB_PATH}
 URL=https://${ip}:${XUI_PORT}${XUI_WEB_PATH}
-MODE=$(config_get mode "lite")
+MODE=${mode}
 CREDS
 
     chmod 600 "$CREDENTIALS_FILE"
@@ -221,8 +224,8 @@ generate_reality_keypair() {
         return 1
     fi
 
-    REALITY_PRIVATE_KEY=$(echo "$output" | grep -i "private" | awk '{print $NF}')
-    REALITY_PUBLIC_KEY=$(echo "$output" | grep -i "public" | awk '{print $NF}')
+    REALITY_PRIVATE_KEY=$(echo "$output" | grep -i "private" | awk '{print $NF}' || true)
+    REALITY_PUBLIC_KEY=$(echo "$output" | grep -i "public" | awk '{print $NF}' || true)
 
     if [ -z "$REALITY_PRIVATE_KEY" ] || [ -z "$REALITY_PUBLIC_KEY" ]; then
         log_error "Failed to parse x25519 output"

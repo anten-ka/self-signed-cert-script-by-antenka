@@ -165,7 +165,7 @@ select_reality_domain() {
         if (( i % 2 == 0 )); then
             echo "" >&2
         fi
-        ((i++))
+        ((i++)) || true
     done
     if (( (i-1) % 2 != 0 )); then echo "" >&2; fi
 

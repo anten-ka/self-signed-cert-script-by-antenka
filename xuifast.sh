@@ -25,7 +25,7 @@ trap cleanup_temp_files EXIT
 
 # ── Root check ──────────────────────────────────────────────────────────
 if [ "$(id -u)" -ne 0 ]; then
-    echo -e "  ${RED}✗${NC} $(t err_need_root)"
+    echo -e "  ${RED}✗${NC} This script must be run as root / Запустите от root"
     exit 1
 fi
 
@@ -99,7 +99,7 @@ install_lite() {
     generate_all_vless_links "lite" "$server_ip" "$mask_domain" || return 1
 
     # 13. Setup stub nginx (optional, for port 80)
-    setup_lite_nginx
+    setup_lite_nginx || log_warning "$(t lite_nginx_optional_fail)"
 
     # 14. Save config
     config_set "mode" "lite"
@@ -300,7 +300,7 @@ post_install_flow() {
             local _msg
             _msg=$(tf test_offline "$first_email")
             printf "\r  %s (%ds)" "$_msg" "$elapsed" >&2
-            read -t 5 -r </dev/tty && break  # Enter to skip
+            read -t 5 -r </dev/tty 2>/dev/null && break || true  # Enter to skip
             elapsed=$((elapsed + 5))
         done
         echo ""
@@ -556,6 +556,7 @@ main() {
     # If already installed — show menu
     if is_xui_installed && [ -f "$XUIFAST_CONFIG" ]; then
         load_credentials
+        setup_api_base
         main_menu
     else
         # First run — install
