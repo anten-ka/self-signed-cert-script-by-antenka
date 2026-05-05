@@ -1,1392 +1,568 @@
 #!/bin/bash
-# ╔═══════════════════════════════════════════════════════════════════════════════╗
-# ║  XUIFAST — Professional 3X-UI Installer                                      ║
-# ║  Version: 2.1                                                                 ║
-# ║  Author: anten-ka                                                              ║
-# ║  Features: Bilingual, IP/Domain modes, Stub sites, VLESS auto-setup           ║
-# ╚═══════════════════════════════════════════════════════════════════════════════╝
+# ╔═══════════════════════════════════════════════════════════════╗
+# ║  XUIFAST v3.0.0 — 3X-UI VPN installer with stealth masking  ║
+# ║  Lite: VLESS + Reality (masquerade as popular site)          ║
+# ║  Pro:  VLESS + TLS (your domain + real website)              ║
+# ║                                                               ║
+# ║  github.com/anten-ka • YouTube: anten-ka                     ║
+# ╚═══════════════════════════════════════════════════════════════╝
 
-# ─────────────────────────────────────────────────────────────────────────────────
-#  GLOBALS
-# ─────────────────────────────────────────────────────────────────────────────────
-LANG_CHOICE=""
-MODE=""            # ip | domain
-DOMAIN=""
-SERVER_IP=""
-XUI_DB="/etc/x-ui/x-ui.db"
-XUI_PORT=""
-XUI_USER=""
-XUI_PASS=""
-XUI_PATH=""
-XUI_URL=""
-CERT_PATH=""
-KEY_PATH=""
-STUB_SITE=""
-LOG_FILE="/tmp/xuifast_install.log"
-API_BASE=""
-CREDS_FILE="/root/.xuifast_credentials"
+set -euo pipefail
 
-# Global arrays for users (set in api_create_inbound, used in test/show)
-USER_NAMES=()
-USER_UUIDS=()
+# ── Resolve script directory ────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-WHITE='\033[1;37m'
-BOLD='\033[1m'
-DIM='\033[2m'
-UNDERLINE='\033[4m'
-RESET='\033[0m'
+# ── Source modules ──────────────────────────────────────────────────────
+source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/i18n.sh"
+source "${SCRIPT_DIR}/lib/xui.sh"
+source "${SCRIPT_DIR}/lib/xui_api.sh"
+source "${SCRIPT_DIR}/lib/reality_domains.sh"
+source "${SCRIPT_DIR}/lib/website.sh"
 
-# ─────────────────────────────────────────────────────────────────────────────────
-#  CLEANUP TRAP (Ctrl+C safety)
-# ─────────────────────────────────────────────────────────────────────────────────
-cleanup() {
-    tput cnorm 2>/dev/null || true
-    rm -rf /tmp/stub_clone_$$ /tmp/xui_cookie.txt /tmp/xuifast_payload.json 2>/dev/null
-    echo ""
-    if [[ "$LANG_CHOICE" == "ru" ]]; then
-        echo -e "  ${YELLOW}⚠${RESET}  Установка прервана пользователем."
-    else
-        echo -e "  ${YELLOW}⚠${RESET}  Installation interrupted by user."
+# ── Cleanup trap ────────────────────────────────────────────────────────
+trap cleanup_temp_files EXIT
+
+# ── Root check ──────────────────────────────────────────────────────────
+if [ "$(id -u)" -ne 0 ]; then
+    echo -e "  ${RED}✗${NC} $(t err_need_root)"
+    exit 1
+fi
+
+# ── Detect or pick language ─────────────────────────────────────────────
+init_language() {
+    local lang
+    lang=$(detect_language)
+    if [ "$lang" = "en" ] && [ ! -f "${XUIFAST_DIR}/.language" ]; then
+        # First run — ask user
+        lang=$(pick_language_interactive)
     fi
-    exit 130
-}
-trap cleanup INT TERM
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  LOCALIZATION
-# ─────────────────────────────────────────────────────────────────────────────────
-declare -A L
-
-set_lang_ru() {
-    L[welcome]="Добро пожаловать в XUIFAST — установщик 3X-UI"
-    L[choose_lang]="Выберите язык / Choose language"
-    L[russian]="Русский"
-    L[english]="English"
-    L[choose_mode]="Выберите режим работы"
-    L[mode_ip]="По IP-адресу  (без домена, быстрая настройка)"
-    L[mode_domain]="По доменному имени  (нужен свой домен)"
-    L[mode_ip_hint]="Подходит если у вас нет домена. Сертификат выпускается автоматически."
-    L[mode_domain_hint]="Более надёжный вариант. Нужен домен, направленный на этот сервер."
-    L[enter_domain]="Введите ваш домен (например: example.com)"
-    L[domain_empty]="Домен не может быть пустым! Попробуйте ещё раз."
-    L[checking_domain]="Проверка домена..."
-    L[domain_ok]="Домен успешно направлен на этот сервер!"
-    L[domain_fail]="Домен НЕ направлен на этот сервер."
-    L[domain_ip_mismatch]="Домен указывает на IP: %s, а IP сервера: %s"
-    L[domain_how_to_fix]="Зайдите в панель управления вашего домена (GoDaddy, Namecheap, REG.RU и т.д.)\nи создайте A-запись, указывающую на IP: %s\nОбычно обновление занимает 5-15 минут."
-    L[domain_wait]="Подождать и проверить снова?"
-    L[yes]="Да"
-    L[no]="Нет"
-    L[installing_deps]="Установка необходимых программ..."
-    L[installing_xui]="Установка панели 3X-UI (это займёт 3-5 минут)..."
-    L[xui_install_failed]="Ошибка установки 3X-UI! Возможные причины:\n  1. Нет подключения к интернету\n  2. Сервер не на Ubuntu 20.04+\n  3. Недостаточно места на диске"
-    L[deploying_stub]="Развёртывание сайта-маскировки..."
-    L[configuring_vless]="Настройка VPN-соединения..."
-    L[creating_users]="Создание пользователей..."
-    L[install_complete]="УСТАНОВКА ЗАВЕРШЕНА!"
-    L[login_title]="ДАННЫЕ ДЛЯ ВХОДА В ПАНЕЛЬ:"
-    L[username]="Имя пользователя"
-    L[password]="Пароль"
-    L[port]="Порт"
-    L[panel_path]="Путь панели"
-    L[login_url]="Ссылка для входа"
-    L[how_to_login]="Откройте ссылку в браузере и введите логин и пароль выше."
-    L[save_warning]="ОБЯЗАТЕЛЬНО СОХРАНИТЕ ЭТИ ДАННЫЕ!"
-    L[creds_saved]="Данные также сохранены в файл: %s"
-    L[cert_info]="О СЕРТИФИКАТАХ:"
-    L[cert_ip_info]="Сертификаты создаются автоматически на 6 дней\nи автоматически продлеваются. Ничего делать не нужно."
-    L[cert_domain_info]="Сертификаты Let's Encrypt получены автоматически.\nСрок действия: 90 дней с автопродлением."
-    L[ready]="Можно приступать к работе!"
-    L[download_happ]="СКАЧАЙТЕ VPN-ПРИЛОЖЕНИЕ"
-    L[choose_platform]="На каком устройстве будете использовать VPN?"
-    L[ios]="iPhone / iPad"
-    L[android]="Android-телефон"
-    L[scan_qr_app]="Отсканируйте QR-код камерой телефона для скачивания:"
-    L[confirm_installed]="Приложение установлено?"
-    L[confirm_hint]="Введите 'да' когда установите приложение"
-    L[test_connection]="ПРОВЕРКА VPN-СОЕДИНЕНИЯ"
-    L[scan_qr_config]="Отсканируйте этот QR-код в приложении Hiddify:"
-    L[waiting_online]="Ожидание подключения..."
-    L[skip_hint]="(нажмите Enter чтобы пропустить)"
-    L[client_online]="Подключение работает! Всё настроено."
-    L[client_timeout]="Не удалось подтвердить подключение автоматически.\nЭто нормально — попробуйте вручную в приложении."
-    L[final_message]="Всё готово! Вы можете войти в панель управления\nи добавить VPN остальным пользователям."
-    L[press_enter]="Нажмите Enter..."
-    L[error_root]="Запустите скрипт от имени root: sudo bash xuifast.sh"
-    L[already_installed]="3X-UI уже установлена. Вот ваши данные:"
-    L[creds_not_found]="Не удалось получить данные панели. Попробуйте:\n  sudo x-ui settings"
-    L[users_created]="VPN-пользователей создано"
-    L[stub_choice]="Сайт-маскировка установлен"
-    L[port_busy]="Порт 443 занят, освобождаю..."
-    L[nginx_installed]="Веб-сервер настроен"
-    L[retry_seconds]="Повторная проверка через %s сек..."
-    L[attempt]="Попытка"
-    L[panel_lang_set]="Язык панели"
-    L[all_users_info]="ВСЕ VPN-ПОЛЬЗОВАТЕЛИ"
-    L[show_all_users_q]="Показать данные всех 10 пользователей?"
-    L[invalid_input]="Неверный ввод. Попробуйте ещё раз."
-    L[api_login_failed]="Не удалось подключиться к панели. Перезапускаю..."
-    L[api_retry]="Повторная попытка подключения..."
-    L[inbound_failed]="Ошибка создания VPN-соединения. Создайте вручную в панели."
+    load_language "$lang"
+    save_language "$lang"
 }
 
-set_lang_en() {
-    L[welcome]="Welcome to XUIFAST — 3X-UI Installer"
-    L[choose_lang]="Выберите язык / Choose language"
-    L[russian]="Русский"
-    L[english]="English"
-    L[choose_mode]="Choose setup mode"
-    L[mode_ip]="By IP address  (no domain needed, quick setup)"
-    L[mode_domain]="By domain name  (requires your own domain)"
-    L[mode_ip_hint]="Best if you don't have a domain. Certificate is created automatically."
-    L[mode_domain_hint]="More reliable option. Requires a domain pointed at this server."
-    L[enter_domain]="Enter your domain (e.g.: example.com)"
-    L[domain_empty]="Domain cannot be empty! Try again."
-    L[checking_domain]="Checking domain..."
-    L[domain_ok]="Domain is correctly pointed to this server!"
-    L[domain_fail]="Domain is NOT pointed to this server."
-    L[domain_ip_mismatch]="Domain resolves to: %s, but server IP is: %s"
-    L[domain_how_to_fix]="Go to your domain provider (GoDaddy, Namecheap, Cloudflare, etc.)\nand create an A record pointing to: %s\nThis usually takes 5-15 minutes to update."
-    L[domain_wait]="Wait and check again?"
-    L[yes]="Yes"
-    L[no]="No"
-    L[installing_deps]="Installing required software..."
-    L[installing_xui]="Installing 3X-UI panel (this takes 3-5 minutes)..."
-    L[xui_install_failed]="3X-UI installation failed! Possible reasons:\n  1. No internet connection\n  2. Server not running Ubuntu 20.04+\n  3. Not enough disk space"
-    L[deploying_stub]="Setting up camouflage website..."
-    L[configuring_vless]="Configuring VPN connection..."
-    L[creating_users]="Creating users..."
-    L[install_complete]="INSTALLATION COMPLETE!"
-    L[login_title]="PANEL LOGIN CREDENTIALS:"
-    L[username]="Username"
-    L[password]="Password"
-    L[port]="Port"
-    L[panel_path]="Panel path"
-    L[login_url]="Login URL"
-    L[how_to_login]="Open the link in your browser and enter the username/password above."
-    L[save_warning]="MAKE SURE TO SAVE THESE CREDENTIALS!"
-    L[creds_saved]="Credentials also saved to: %s"
-    L[cert_info]="ABOUT CERTIFICATES:"
-    L[cert_ip_info]="Certificates are auto-generated for 6 days\nand automatically renewed. No action needed."
-    L[cert_domain_info]="Let's Encrypt certificates obtained automatically.\nValid for 90 days with auto-renewal."
-    L[ready]="Ready to go!"
-    L[download_happ]="DOWNLOAD VPN APP"
-    L[choose_platform]="What device will you use VPN on?"
-    L[ios]="iPhone / iPad"
-    L[android]="Android phone"
-    L[scan_qr_app]="Scan the QR code with your phone camera to download:"
-    L[confirm_installed]="Is the app installed?"
-    L[confirm_hint]="Type 'yes' when you've installed the app"
-    L[test_connection]="VPN CONNECTION TEST"
-    L[scan_qr_config]="Scan this QR code in the Hiddify app:"
-    L[waiting_online]="Waiting for connection..."
-    L[skip_hint]="(press Enter to skip)"
-    L[client_online]="Connection works! Everything is set up."
-    L[client_timeout]="Could not confirm connection automatically.\nThis is normal — try connecting manually in the app."
-    L[final_message]="All done! You can log into the control panel\nand add VPN for more users."
-    L[press_enter]="Press Enter..."
-    L[error_root]="Run as root: sudo bash xuifast.sh"
-    L[already_installed]="3X-UI is already installed. Here are your credentials:"
-    L[creds_not_found]="Could not retrieve panel credentials. Try:\n  sudo x-ui settings"
-    L[users_created]="VPN users created"
-    L[stub_choice]="Camouflage website deployed"
-    L[port_busy]="Port 443 is busy, freeing it..."
-    L[nginx_installed]="Web server configured"
-    L[retry_seconds]="Rechecking in %s sec..."
-    L[attempt]="Attempt"
-    L[panel_lang_set]="Panel language"
-    L[all_users_info]="ALL VPN USERS"
-    L[show_all_users_q]="Show all 10 user configs?"
-    L[invalid_input]="Invalid input. Try again."
-    L[api_login_failed]="Could not connect to panel. Restarting..."
-    L[api_retry]="Retrying connection..."
-    L[inbound_failed]="Failed to create VPN connection. Create it manually in the panel."
+# ═══════════════════════════════════════════════════════════════════════
+# INSTALL FLOW — LITE MODE (Reality)
+# ═══════════════════════════════════════════════════════════════════════
+install_lite() {
+    log_step "$(t install_lite_step)"
+
+    local server_ip
+    server_ip=$(get_server_ip) || { log_error "Cannot detect IP"; return 1; }
+
+    # 1. Select masquerade domain
+    local mask_domain
+    mask_domain=$(select_reality_domain "$server_ip") || return 1
+
+    # 2. Show config summary
+    print_header "$(t config_title)"
+    echo -e "  $(t config_ip)       ${CYAN}${server_ip}${NC}"
+    echo -e "  $(t config_port)     ${CYAN}443${NC}"
+    echo -e "  $(t config_mode)     ${CYAN}Lite (Reality)${NC}"
+    echo -e "  $(t config_mask)     ${CYAN}${mask_domain}${NC}"
+    echo -e "  $(t config_users)    ${CYAN}10${NC}"
+    echo ""
+
+    confirm "$(t config_confirm)" || return 0
+
+    # 3. Install dependencies
+    install_dependencies || return 1
+
+    # 4. Install 3X-UI
+    install_3xui || return 1
+
+    # 5. Extract credentials
+    extract_credentials
+    setup_api_base
+
+    # 6. Wait for API
+    run_with_spinner "$(t api_waiting)" wait_for_api 90 || return 1
+
+    # 7. Login
+    api_login_with_retry || return 1
+
+    # 8. Set panel language
+    api_set_language "$LANG_CODE"
+
+    # 9. Generate Reality keypair
+    generate_reality_keypair || return 1
+
+    # 10. Generate 10 users
+    log_info "$(tf users_creating 10)"
+    generate_clients 10 "lite"
+
+    # 11. Create Reality inbound
+    api_create_reality_inbound "$mask_domain" || return 1
+
+    # 12. Generate VLESS links
+    generate_all_vless_links "lite" "$server_ip" "$mask_domain"
+
+    # 13. Setup stub nginx (optional, for port 80)
+    setup_lite_nginx
+
+    # 14. Save config
+    config_set "mode" "lite"
+    config_set "mask_domain" "$mask_domain"
+    config_set "server_ip" "$server_ip"
+    config_set_int "port" 443
+    config_set_int "users_count" 10
+    config_set "version" "$XUIFAST_VERSION"
+    config_set "installed_at" "$(date -Iseconds)"
+
+    # 15. Save Reality keys to config
+    config_set "reality_private_key" "$REALITY_PRIVATE_KEY"
+    config_set "reality_public_key" "$REALITY_PUBLIC_KEY"
+
+    # 16. Save credentials
+    save_credentials
+
+    # 17. Done!
+    echo ""
+    echo -e "  ${GREEN}${BOLD}════════════════════════════════════════════════════${NC}"
+    echo -e "  ${GREEN}${BOLD}  $(tf install_done "$XUIFAST_VERSION" "Lite")${NC}"
+    echo -e "  ${GREEN}${BOLD}════════════════════════════════════════════════════${NC}"
+    echo ""
+
+    show_credentials
+    post_install_flow "lite" "$server_ip" "$mask_domain"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────────
-#  UI HELPERS
-# ─────────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════
+# INSTALL FLOW — PRO MODE (TLS)
+# ═══════════════════════════════════════════════════════════════════════
+install_pro() {
+    log_step "$(t install_pro_step)"
 
-spinner() {
-    local pid=$1
-    local msg=$2
-    local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-    local i=0
-    tput civis 2>/dev/null || true
-    while kill -0 "$pid" 2>/dev/null; do
-        printf "\r  ${CYAN}${frames[$i]}${RESET} %s" "$msg"
-        i=$(( (i + 1) % ${#frames[@]} ))
-        sleep 0.1
-    done
-    wait "$pid" 2>/dev/null
-    local exit_code=$?
-    if [[ $exit_code -eq 0 ]]; then
-        printf "\r  ${GREEN}✓${RESET} %s\n" "$msg"
-    else
-        printf "\r  ${RED}✗${RESET} %s\n" "$msg"
+    local server_ip
+    server_ip=$(get_server_ip) || { log_error "Cannot detect IP"; return 1; }
+
+    # 1. Ask for domain
+    echo ""
+    echo -ne "  $(t pro_enter_domain) "
+    local domain
+    read -r domain
+    domain=$(echo "$domain" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+
+    if ! valid_domain "$domain"; then
+        log_error "$(tf pro_bad_domain "$domain")"
+        return 1
     fi
-    tput cnorm 2>/dev/null || true
-    return $exit_code
-}
 
-print_header() {
-    local text="$1"
-    local width=60
-    local text_len=${#text}
-    # Clamp for long UTF-8 strings
-    if [[ $text_len -gt $width ]]; then text_len=$width; fi
-    local padding=$(( (width - text_len) / 2 ))
+    # 2. DNS check
+    if ! check_dns "$domain" "$server_ip"; then
+        local resolved
+        resolved=$(dig +short "$domain" A 2>/dev/null | tail -1)
+        log_warning "$(tf pro_dns_mismatch "$domain" "${resolved:-N/A}" "$server_ip")"
+        confirm "$(t pro_continue_anyway)" || return 0
+    fi
+
+    # 3. Email for SSL
+    echo -ne "  $(t pro_enter_email) "
+    local email
+    read -r email
+    email=$(echo "$email" | tr -d '[:space:]')
+
+    # 4. Template selection (from catalog or stub)
+    local template_dir=""
+    if [ -f "$TEMPLATES_CATALOG" ] && command -v jq &>/dev/null; then
+        # Use template catalog if available
+        source "${SCRIPT_DIR}/lib/templates_catalog.sh" 2>/dev/null
+        if type interactive_template_selection &>/dev/null; then
+            template_dir=$(interactive_template_selection) || true
+        fi
+    fi
+
+    # 5. Show config summary
+    print_header "$(t config_title)"
+    echo -e "  $(t config_ip)       ${CYAN}${server_ip}${NC}"
+    echo -e "  $(t config_domain)   ${CYAN}${domain}${NC}"
+    echo -e "  $(t config_port)     ${CYAN}443${NC}"
+    echo -e "  $(t config_mode)     ${CYAN}Pro (TLS)${NC}"
+    echo -e "  $(t config_users)    ${CYAN}10${NC}"
     echo ""
-    printf "  ${PURPLE}╔"
-    printf '═%.0s' $(seq 1 $width)
-    printf "╗${RESET}\n"
-    printf "  ${PURPLE}║${RESET}"
-    printf '%*s' $padding ''
-    printf "${BOLD}${WHITE}%s${RESET}" "$text"
-    printf '%*s' $(( width - padding - text_len )) ''
-    printf "${PURPLE}║${RESET}\n"
-    printf "  ${PURPLE}╚"
-    printf '═%.0s' $(seq 1 $width)
-    printf "╝${RESET}\n"
+
+    confirm "$(t config_confirm)" || return 0
+
+    # 6. Install dependencies
+    install_dependencies || return 1
+
+    # 7. Stop anything on port 443
+    fuser -k 443/tcp 2>/dev/null || true
+
+    # 8. Setup website + SSL first (needs port 80 and 443 free)
+    if [ -n "$template_dir" ]; then
+        setup_pro_website "$domain" "$template_dir" "$email" || return 1
+    else
+        # No template — deploy stub and get SSL
+        install_nginx || return 1
+        install_certbot || return 1
+        deploy_stub_site
+        obtain_ssl_certificate "$domain" "$email" || return 1
+        generate_nginx_pro_config "$domain"
+        systemctl restart nginx 2>/dev/null
+        setup_ssl_auto_renewal
+    fi
+
+    # 9. Stop nginx on 443 — xray will take over
+    # nginx stays on :80, xray takes :443 with fallback to :80
+
+    # 10. Install 3X-UI
+    install_3xui || return 1
+
+    # 11. Extract credentials
+    extract_credentials
+    setup_api_base
+
+    # 12. Wait for API
+    run_with_spinner "$(t api_waiting)" wait_for_api 90 || return 1
+
+    # 13. Login
+    api_login_with_retry || return 1
+
+    # 14. Set panel language
+    api_set_language "$LANG_CODE"
+
+    # 15. Generate 10 users
+    log_info "$(tf users_creating 10)"
+    generate_clients 10 "pro"
+
+    # 16. Create TLS inbound
+    local cert_file="/etc/letsencrypt/live/${domain}/fullchain.pem"
+    local key_file="/etc/letsencrypt/live/${domain}/privkey.pem"
+    api_create_tls_inbound "$domain" "$cert_file" "$key_file" || return 1
+
+    # 17. Generate VLESS links
+    generate_all_vless_links "pro" "$domain"
+
+    # 18. Save config
+    config_set "mode" "pro"
+    config_set "domain" "$domain"
+    config_set "server_ip" "$server_ip"
+    config_set "email" "$email"
+    config_set_int "port" 443
+    config_set_int "users_count" 10
+    config_set "version" "$XUIFAST_VERSION"
+    config_set "installed_at" "$(date -Iseconds)"
+
+    # 19. Save credentials
+    save_credentials
+
+    # 20. Done!
+    echo ""
+    echo -e "  ${GREEN}${BOLD}════════════════════════════════════════════════════${NC}"
+    echo -e "  ${GREEN}${BOLD}  $(tf install_done "$XUIFAST_VERSION" "Pro")${NC}"
+    echo -e "  ${GREEN}${BOLD}════════════════════════════════════════════════════${NC}"
+    echo ""
+
+    show_credentials
+    post_install_flow "pro" "$domain"
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# POST-INSTALL FLOW
+# ═══════════════════════════════════════════════════════════════════════
+post_install_flow() {
+    local mode="$1"
+    local server="$2"              # IP (lite) or domain (pro)
+    local mask_domain="${3:-}"      # only for lite
+
+    echo ""
+    echo -ne "  $(t press_enter) "
+    read -r
+
+    # App download step
+    show_app_download
+
+    # Show first user's QR
+    if [ -f /tmp/xuifast_links.json ]; then
+        local first_name first_link
+        first_name=$(python3 -c "import json; d=json.load(open('/tmp/xuifast_links.json')); print(list(d.keys())[0])" 2>/dev/null)
+        first_link=$(python3 -c "import json; d=json.load(open('/tmp/xuifast_links.json')); print(list(d.values())[0])" 2>/dev/null)
+
+        if [ -n "$first_name" ] && [ -n "$first_link" ]; then
+            show_user_link "$first_name" "$first_link"
+        fi
+    fi
+
+    # Connection test
+    echo ""
+    echo -e "  ${BOLD}$(t test_title)${NC}"
+    echo -e "  ${DIM}$(t test_skip)${NC}"
+    echo ""
+
+    local test_timeout=120
+    local elapsed=0
+    local first_email
+    first_email=$(python3 -c "import json; d=json.load(open('/tmp/xuifast_users_map.json')); print(list(d.keys())[0])" 2>/dev/null)
+
+    if [ -n "$first_email" ]; then
+        while [ "$elapsed" -lt "$test_timeout" ]; do
+            if check_client_online "$first_email"; then
+                echo -e "  $(tf test_online "$first_email")"
+                break
+            fi
+            printf "\r  $(tf test_offline "$first_email") (%ds)" "$elapsed" >&2
+            read -t 5 -r && break  # Enter to skip
+            elapsed=$((elapsed + 5))
+        done
+        echo ""
+    fi
+
+    # Ask to show all users
+    echo ""
+    if confirm "$(t users_show_all)"; then
+        show_all_users_formatted
+    fi
+
+    echo ""
+    echo -e "  $(t enjoy)"
+    echo -e "  ${DIM}$(t install_done_hint)${NC}"
     echo ""
 }
 
-print_separator() {
-    printf "  ${DIM}"
-    printf '─%.0s' $(seq 1 60)
-    printf "${RESET}\n"
-}
-
-print_info() {
-    printf "  ${CYAN}ℹ${RESET}  %s\n" "$1"
-}
-
-print_success() {
-    printf "  ${GREEN}✓${RESET}  %s\n" "$1"
-}
-
-print_warning() {
-    printf "  ${YELLOW}⚠${RESET}  %s\n" "$1"
-}
-
-print_error() {
-    printf "  ${RED}✗${RESET}  %s\n" "$1"
-}
-
-wait_enter() {
+# ── Show app download ───────────────────────────────────────────────────
+show_app_download() {
+    print_header "$(t app_title)"
+    echo -e "  ${CYAN}1)${NC} $(t app_ios)"
+    echo -e "  ${CYAN}2)${NC} $(t app_android)"
     echo ""
-    printf "  ${DIM}%s${RESET}" "${L[press_enter]}"
+    echo -ne "  $(t app_platform) "
+    local platform
+    read -r platform
+
+    case "$platform" in
+        1) echo -e "  ${GREEN}$(t app_ios_hint)${NC}"
+           echo ""
+           if command -v qrencode &>/dev/null; then
+               echo -e "  ${DIM}App Store: Hiddify${NC}"
+               qrencode -t UTF8 -m 2 "https://apps.apple.com/app/hiddify-proxy-vpn/id6596777532" 2>/dev/null
+           fi
+           ;;
+        2) echo -e "  ${GREEN}$(t app_android_hint)${NC}"
+           echo ""
+           if command -v qrencode &>/dev/null; then
+               echo -e "  ${DIM}Google Play: Hiddify${NC}"
+               qrencode -t UTF8 -m 2 "https://play.google.com/store/apps/details?id=app.hiddify.com" 2>/dev/null
+           fi
+           ;;
+    esac
+
+    echo ""
+    echo -ne "  $(t app_installed) [Y/n] "
     read -r
 }
 
-# Read a choice with validation. Usage: read_choice "prompt" 1 3 → sets REPLY
-read_choice() {
-    local prompt="$1"
-    local min="$2"
-    local max="$3"
-    while true; do
-        printf "  ${CYAN}▸${RESET} "
-        read -r REPLY
-        if [[ "$REPLY" =~ ^[0-9]+$ ]] && [[ "$REPLY" -ge "$min" ]] && [[ "$REPLY" -le "$max" ]]; then
-            return 0
-        fi
-        print_warning "${L[invalid_input]:-Invalid input. Try again.}"
-    done
-}
-
-# Confirm yes/no. Returns 0 for yes, 1 for no.
-confirm_yes() {
-    local answer
-    read -r answer
-    answer=$(echo "$answer" | tr '[:upper:]' '[:lower:]')
-    case "$answer" in
-        y|yes|да|д|1|ок|ok) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-show_qr() {
-    local data="$1"
-    if command -v qrencode &>/dev/null; then
-        qrencode -t ANSIUTF8 "$data" 2>/dev/null || {
-            echo ""
-            printf "  ${DIM}Link: %s${RESET}\n" "$data"
-        }
-    else
-        echo ""
-        printf "  ${YELLOW}⚠${RESET}  QR unavailable. Use link:\n"
-        printf "  ${CYAN}%s${RESET}\n" "$data"
-    fi
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  RANDOM NAME GENERATOR (100 adjectives × 100 animals)
-# ─────────────────────────────────────────────────────────────────────────────────
-
-generate_random_names() {
-    local count=$1
-
-    if [[ "$LANG_CHOICE" == "ru" ]]; then
-        local adjectives=(
-            "быстрый" "храбрый" "весёлый" "тихий" "громкий"
-            "хитрый" "дерзкий" "ленивый" "шустрый" "грозный"
-            "мудрый" "яркий" "тёмный" "рыжий" "пушистый"
-            "колючий" "скользкий" "прыткий" "задорный" "сонный"
-            "голодный" "сытый" "дикий" "ручной" "смелый"
-            "робкий" "гордый" "упрямый" "нежный" "суровый"
-            "ловкий" "неуклюжий" "бодрый" "вялый" "резвый"
-            "спокойный" "буйный" "свирепый" "кроткий" "лютый"
-            "игривый" "серьёзный" "забавный" "угрюмый" "лучезарный"
-            "полосатый" "пятнистый" "крылатый" "зубастый" "когтистый"
-            "пузатый" "ушастый" "глазастый" "носатый" "хвостатый"
-            "мохнатый" "гладкий" "шершавый" "блестящий" "матовый"
-            "звонкий" "гулкий" "шипящий" "рычащий" "мурлыкающий"
-            "парящий" "плывущий" "бегущий" "крадущийся" "прыгающий"
-            "танцующий" "поющий" "дремлющий" "охотящийся" "играющий"
-            "северный" "южный" "восточный" "западный" "полярный"
-            "степной" "лесной" "горный" "морской" "речной"
-            "древний" "юный" "вечный" "редкий" "легендарный"
-            "магический" "таинственный" "славный" "отважный" "великий"
-            "маленький" "огромный" "крохотный" "гигантский" "средний"
-        )
-        local animals=(
-            "барсук" "жираф" "обезьяна" "лисица" "волк"
-            "медведь" "тигр" "леопард" "рысь" "пума"
-            "орёл" "сокол" "ястреб" "коршун" "филин"
-            "дельфин" "касатка" "акула" "тюлень" "морж"
-            "кролик" "заяц" "белка" "бурундук" "ёж"
-            "олень" "лось" "бизон" "антилопа" "зебра"
-            "пингвин" "фламинго" "пеликан" "журавль" "аист"
-            "крокодил" "хамелеон" "игуана" "варан" "кобра"
-            "панда" "коала" "кенгуру" "утконос" "вомбат"
-            "выдра" "бобёр" "норка" "горностай" "соболь"
-            "попугай" "тукан" "колибри" "павлин" "снегирь"
-            "лемур" "шимпанзе" "горилла" "мандрил" "капуцин"
-            "скат" "осьминог" "кальмар" "краб" "омар"
-            "мустанг" "зубр" "як" "буйвол" "газель"
-            "песец" "манул" "ирбис" "гепард" "оцелот"
-            "альбатрос" "кондор" "гриф" "сапсан" "беркут"
-            "саламандра" "тритон" "аксолотль" "гекон" "удав"
-            "нарвал" "белуга" "ламантин" "каланг" "кит"
-            "сурок" "шиншилла" "дикобраз" "капибара" "тапир"
-            "феникс" "грифон" "единорог" "дракон" "мантикора"
-        )
-    else
-        local adjectives=(
-            "swift" "brave" "clever" "silent" "fierce"
-            "mighty" "sneaky" "lazy" "agile" "bold"
-            "wise" "bright" "dark" "golden" "fluffy"
-            "spiky" "slick" "nimble" "jolly" "sleepy"
-            "hungry" "wild" "tame" "fearless" "humble"
-            "proud" "stubborn" "gentle" "harsh" "deft"
-            "clumsy" "lively" "calm" "rowdy" "savage"
-            "meek" "playful" "serious" "funny" "gloomy"
-            "radiant" "striped" "spotted" "winged" "fanged"
-            "clawed" "furry" "smooth" "shiny" "matte"
-            "ringing" "hissing" "roaring" "purring" "soaring"
-            "drifting" "running" "creeping" "jumping" "dancing"
-            "singing" "dozing" "hunting" "northern" "southern"
-            "eastern" "western" "polar" "steppe" "forest"
-            "mountain" "marine" "river" "ancient" "young"
-            "eternal" "rare" "legendary" "mystic" "arcane"
-            "glorious" "valiant" "grand" "tiny" "huge"
-            "colossal" "average" "crimson" "azure" "emerald"
-            "amber" "ivory" "obsidian" "copper" "iron"
-            "crystal" "phantom" "shadow" "thunder" "frost"
-        )
-        local animals=(
-            "badger" "giraffe" "monkey" "fox" "wolf"
-            "bear" "tiger" "leopard" "lynx" "puma"
-            "eagle" "falcon" "hawk" "kite" "owl"
-            "dolphin" "orca" "shark" "seal" "walrus"
-            "rabbit" "hare" "squirrel" "chipmunk" "hedgehog"
-            "deer" "moose" "bison" "antelope" "zebra"
-            "penguin" "flamingo" "pelican" "crane" "stork"
-            "crocodile" "chameleon" "iguana" "monitor" "cobra"
-            "panda" "koala" "kangaroo" "platypus" "wombat"
-            "otter" "beaver" "mink" "ermine" "sable"
-            "parrot" "toucan" "hummingbird" "peacock" "robin"
-            "lemur" "chimp" "gorilla" "mandrill" "capuchin"
-            "ray" "octopus" "squid" "crab" "lobster"
-            "mustang" "wisent" "yak" "buffalo" "gazelle"
-            "arcticfox" "manul" "snowleopard" "cheetah" "ocelot"
-            "albatross" "condor" "vulture" "peregrine" "harrier"
-            "salamander" "newt" "axolotl" "gecko" "python"
-            "narwhal" "beluga" "manatee" "dugong" "whale"
-            "marmot" "chinchilla" "porcupine" "capybara" "tapir"
-            "phoenix" "griffin" "unicorn" "dragon" "manticore"
-        )
-    fi
-
-    local names=()
-    local used_map=""
-    local attempts=0
-
-    while [[ ${#names[@]} -lt "$count" ]] && [[ $attempts -lt 200 ]]; do
-        local adj_idx=$(( RANDOM % ${#adjectives[@]} ))
-        local ani_idx=$(( RANDOM % ${#animals[@]} ))
-        local name="${adjectives[$adj_idx]}-${animals[$ani_idx]}"
-        attempts=$((attempts + 1))
-
-        # Check uniqueness via string search
-        if [[ "$used_map" != *"|${name}|"* ]]; then
-            names+=("$name")
-            used_map+="|${name}|"
-        fi
-    done
-
-    printf '%s\n' "${names[@]}"
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  STUB WEBSITES (3 variants from open-source template libraries)
-# ─────────────────────────────────────────────────────────────────────────────────
-
-TEMPLATES=(
-    "h5up_dimension|Dimension|https://github.com/zce/html5up|html5up|dimension"
-    "lz_coffee_shop|Coffee Shop|https://github.com/learning-zone/website-templates|learning-zone|coffee-shop-free-html5-template"
-    "sb_clean_blog|Clean Blog|https://github.com/StartBootstrap/startbootstrap-clean-blog|startbootstrap|."
-)
-
-deploy_stub_site() {
-    local site_dir="/var/www/html"
-    local tmp_clone="/tmp/stub_clone_$$"
-
-    mkdir -p "$site_dir"
-
-    local pick=$(( RANDOM % ${#TEMPLATES[@]} ))
-    local tpl="${TEMPLATES[$pick]}"
-
-    IFS='|' read -r tpl_id tpl_name tpl_repo tpl_source tpl_path <<< "$tpl"
-    STUB_SITE="$tpl_name"
-
-    rm -rf "$tmp_clone"
-
-    local clone_ok=0
-    case "$tpl_source" in
-        html5up|learning-zone)
-            # Sparse checkout: clone only the needed subdirectory
-            if git clone --depth 1 --filter=blob:none --sparse "$tpl_repo" "$tmp_clone" >/dev/null 2>&1 || \
-               git clone --depth 1 "$tpl_repo" "$tmp_clone" >/dev/null 2>&1; then
-                (cd "$tmp_clone" && git sparse-checkout set "$tpl_path" 2>/dev/null)
-                if [[ -d "$tmp_clone/$tpl_path" ]]; then
-                    rm -rf "${site_dir:?}"/*
-                    cp -r "$tmp_clone/$tpl_path"/* "$site_dir/" 2>/dev/null
-                    clone_ok=1
-                fi
-            fi
-            ;;
-        startbootstrap)
-            if git clone --depth 1 "$tpl_repo" "$tmp_clone" >/dev/null 2>&1; then
-                rm -rf "${site_dir:?}"/*
-                if [[ -f "$tmp_clone/dist/index.html" ]]; then
-                    cp -r "$tmp_clone/dist/"* "$site_dir/"
-                elif [[ -f "$tmp_clone/index.html" ]]; then
-                    cp -r "$tmp_clone/"* "$site_dir/"
-                else
-                    local found_idx
-                    found_idx=$(find "$tmp_clone" -name "index.html" -type f 2>/dev/null | head -1)
-                    [[ -n "$found_idx" ]] && cp -r "$(dirname "$found_idx")"/* "$site_dir/"
-                fi
-                clone_ok=1
-            fi
-            ;;
-    esac
-
-    rm -rf "$tmp_clone"
-
-    # Verify or fallback
-    if [[ $clone_ok -eq 1 ]] && [[ -f "$site_dir/index.html" ]]; then
-        chown -R www-data:www-data "$site_dir" 2>/dev/null || true
-        chmod -R 755 "$site_dir"
-    else
-        # Fallback
-        cat > "$site_dir/index.html" << 'FALLBACKEOF'
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Welcome</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}
-.c{max-width:600px;padding:2rem}h1{font-size:2.5rem;margin-bottom:1rem;background:linear-gradient(135deg,#6366f1,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-p{color:#94a3b8;line-height:1.8}</style></head><body><div class="c"><h1>Welcome</h1><p>Site under construction.</p></div></body></html>
-FALLBACKEOF
-        STUB_SITE="Fallback"
-    fi
-
-    print_success "${L[stub_choice]}: $STUB_SITE"
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  NGINX SETUP
-# ─────────────────────────────────────────────────────────────────────────────────
-
-setup_nginx() {
-    # Free port 443 if occupied
-    if ss -tlnp 2>/dev/null | grep -q ':443 '; then
-        print_warning "${L[port_busy]}"
-        systemctl stop nginx 2>/dev/null || true
-        systemctl stop apache2 2>/dev/null || true
-        fuser -k 443/tcp 2>/dev/null || true
-        sleep 1
-    fi
-
-    apt-get install -y nginx >/dev/null 2>&1 || true
-
-    local server_name="_"
-    [[ "$MODE" == "domain" ]] && server_name="$DOMAIN"
-
-    cat > /etc/nginx/sites-available/stub << NGINXEOF
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name ${server_name};
-    root /var/www/html;
-    index index.html;
-    location / { try_files \$uri \$uri/ =404; }
-    location = /favicon.ico { log_not_found off; access_log off; }
-}
-NGINXEOF
-
-    ln -sf /etc/nginx/sites-available/stub /etc/nginx/sites-enabled/
-    rm -f /etc/nginx/sites-enabled/default
-
-    if nginx -t >/dev/null 2>&1; then
-        systemctl enable nginx >/dev/null 2>&1
-        systemctl restart nginx
-        print_success "${L[nginx_installed]}"
-    else
-        print_warning "Nginx config error, trying to fix..."
-        rm -f /etc/nginx/sites-enabled/*
-        ln -sf /etc/nginx/sites-available/stub /etc/nginx/sites-enabled/
-        systemctl restart nginx 2>/dev/null || true
-    fi
-}
-
-# Reconfigure after xray takes port 443
-setup_fallback_nginx() {
-    cat > /etc/nginx/sites-available/stub << NGINXEOF
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
-    root /var/www/html;
-    index index.html;
-    location / { try_files \$uri \$uri/ =404; }
-    location = /favicon.ico { log_not_found off; access_log off; }
-}
-NGINXEOF
-
-    ln -sf /etc/nginx/sites-available/stub /etc/nginx/sites-enabled/
-    rm -f /etc/nginx/sites-enabled/default
-    nginx -t >/dev/null 2>&1 && systemctl restart nginx 2>/dev/null || true
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  DNS CHECK
-# ─────────────────────────────────────────────────────────────────────────────────
-
-check_dns() {
-    local domain="$1"
-    local max_attempts=10
-    local attempt=1
-
-    while true; do
-        printf "\r  ${CYAN}◌${RESET} ${L[checking_domain]} (${L[attempt]} %d)  " "$attempt"
-
-        local resolved_ip=""
-        resolved_ip=$(dig +short "$domain" A 2>/dev/null | grep -E '^[0-9]+\.' | head -1)
-
-        if [[ "$resolved_ip" == "$SERVER_IP" ]]; then
-            printf "\r  ${GREEN}✓${RESET} ${L[domain_ok]}                              \n"
-            return 0
-        fi
-
-        printf "\n"
-        if [[ -n "$resolved_ip" ]]; then
-            print_warning "$(printf "${L[domain_ip_mismatch]}" "$resolved_ip" "$SERVER_IP")"
-        else
-            print_warning "${L[domain_fail]}"
-        fi
-
-        # Show how to fix
-        echo ""
-        printf "  ${DIM}"
-        printf "${L[domain_how_to_fix]}" "$SERVER_IP"
-        printf "${RESET}\n"
-
-        if [[ $attempt -ge $max_attempts ]]; then
-            return 1
-        fi
-
-        echo ""
-        printf "  ${YELLOW}?${RESET} ${L[domain_wait]} [${L[yes]}/${L[no]}]: "
-        if ! confirm_yes; then
-            return 1
-        fi
-
-        local wait_time=30
-        for ((i=wait_time; i>0; i--)); do
-            printf "\r  ${DIM}$(printf "${L[retry_seconds]}" "$i")${RESET}   "
-            sleep 1
-        done
-        printf "\r%60s\r" " "
-
-        attempt=$((attempt + 1))
-    done
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  3X-UI INSTALLATION
-# ─────────────────────────────────────────────────────────────────────────────────
-
-install_3xui() {
-    > "$LOG_FILE"
-
-    if [[ "$MODE" == "domain" ]]; then
-        expect << XEOF 2>&1 | tee -a "$LOG_FILE" >/dev/null
-set timeout 600
-spawn bash -c "curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh | bash"
-
-expect {
-    -re "(?i)confirm.*install" { sleep 1; send "y\r"; exp_continue }
-    -re "(?i)customize.*panel.*port" { sleep 1; send "n\r"; exp_continue }
-    -re "(?i)choose.*option|SSL certificate" { sleep 1; send "1\r"; exp_continue }
-    -re "(?i)domain" { sleep 1; send "${DOMAIN}\r"; exp_continue }
-    -re "(?i)email.*acme|email.*cert" { sleep 1; send "\r"; exp_continue }
-    -re "(?i)reload.*cmd|reloadcmd" { sleep 1; send "n\r"; exp_continue }
-    timeout { }
-    eof { }
-}
-XEOF
-    else
-        expect << XEOF 2>&1 | tee -a "$LOG_FILE" >/dev/null
-set timeout 600
-spawn bash -c "curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh | bash"
-
-expect {
-    -re "(?i)confirm.*install" { sleep 1; send "y\r"; exp_continue }
-    -re "(?i)customize.*panel.*port" { sleep 1; send "n\r"; exp_continue }
-    -re "(?i)choose.*option|SSL certificate" { sleep 1; send "2\r"; exp_continue }
-    -re "(?i)port.*acme|port.*use" { sleep 1; send "\r"; exp_continue }
-    -re "(?i)reload.*cmd|reloadcmd" { sleep 1; send "n\r"; exp_continue }
-    timeout { }
-    eof { }
-}
-XEOF
-    fi
-
-    # Verify installation succeeded
-    sleep 3
-    if [[ ! -f "/usr/local/x-ui/x-ui" ]]; then
-        print_error "$(echo -e "${L[xui_install_failed]}")"
-        exit 1
-    fi
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  EXTRACT PANEL CREDENTIALS
-# ─────────────────────────────────────────────────────────────────────────────────
-
-extract_credentials() {
-    # From database first
-    if [[ -f "$XUI_DB" ]] && command -v sqlite3 &>/dev/null; then
-        XUI_USER=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='username';" 2>/dev/null || true)
-        XUI_PASS=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='password';" 2>/dev/null || true)
-        XUI_PORT=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='port';" 2>/dev/null || true)
-        XUI_PATH=$(sqlite3 "$XUI_DB" "SELECT value FROM settings WHERE key='webBasePath';" 2>/dev/null || true)
-    fi
-
-    # Fallback to log
-    if [[ -z "$XUI_USER" ]] || [[ -z "$XUI_PASS" ]]; then
-        XUI_USER=$(grep -oP 'Username:\s*\K\S+' "$LOG_FILE" 2>/dev/null | tail -1 | tr -d '\r')
-        XUI_PASS=$(grep -oP 'Password:\s*\K\S+' "$LOG_FILE" 2>/dev/null | tail -1 | tr -d '\r')
-    fi
-
-    if [[ ! "${XUI_PORT:-}" =~ ^[0-9]+$ ]]; then
-        XUI_PORT=$(grep -oP 'Port:\s*\K[0-9]+' "$LOG_FILE" 2>/dev/null | tail -1 | tr -d '\r')
-    fi
-
-    if [[ -z "${XUI_PATH:-}" ]]; then
-        XUI_PATH=$(grep -oP 'WebBasePath:\s*\K\S+' "$LOG_FILE" 2>/dev/null | tail -1 | tr -d '\r')
-    fi
-
-    XUI_PATH=$(echo "${XUI_PATH:-}" | tr -d '"/')
-
-    # Validate we got something
-    if [[ -z "$XUI_USER" ]] || [[ -z "$XUI_PASS" ]] || [[ -z "$XUI_PORT" ]]; then
-        print_error "$(echo -e "${L[creds_not_found]}")"
+# ── Show all users formatted ────────────────────────────────────────────
+show_all_users_formatted() {
+    if [ ! -f /tmp/xuifast_links.json ]; then
         return 1
     fi
 
-    if [[ "$MODE" == "domain" ]]; then
-        XUI_URL="https://${DOMAIN}:${XUI_PORT}/${XUI_PATH}/"
-    else
-        XUI_URL="https://${SERVER_IP}:${XUI_PORT}/${XUI_PATH}/"
-    fi
+    print_header "$(t users_title)"
 
-    API_BASE="https://127.0.0.1:${XUI_PORT}/${XUI_PATH}"
-
-    # Save credentials to file for recovery
-    cat > "$CREDS_FILE" << CREDEOF
-# XUIFAST Panel Credentials (auto-saved)
-USERNAME=$XUI_USER
-PASSWORD=$XUI_PASS
-PORT=$XUI_PORT
-PATH=/${XUI_PATH}/
-URL=$XUI_URL
-MODE=$MODE
-DOMAIN=$DOMAIN
-IP=$SERVER_IP
-CREDEOF
-    chmod 600 "$CREDS_FILE"
-
-    rm -f "$LOG_FILE"
-    return 0
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  3X-UI API FUNCTIONS
-# ─────────────────────────────────────────────────────────────────────────────────
-
-# Wait for panel API to become available
-wait_for_api() {
-    local max_wait=60
-    local elapsed=0
-    while [[ $elapsed -lt $max_wait ]]; do
-        if curl -sk --max-time 3 "${API_BASE}/login" >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 2
-        elapsed=$((elapsed + 2))
-    done
-    return 1
-}
-
-api_login() {
-    # Single clean login, save cookie to file
-    # Use --data-urlencode for safe handling of special chars (&, =, +, etc.)
-    local http_code
-    http_code=$(curl -sk -w '%{http_code}' -o /dev/null -c /tmp/xui_cookie.txt \
-        "${API_BASE}/login" \
-        --data-urlencode "username=${XUI_USER}" \
-        --data-urlencode "password=${XUI_PASS}" 2>/dev/null)
-
-    if [[ "$http_code" != "200" ]] || [[ ! -f /tmp/xui_cookie.txt ]]; then
-        return 1
-    fi
-    return 0
-}
-
-api_login_with_retry() {
-    for attempt in 1 2 3; do
-        if api_login; then
-            return 0
-        fi
-        if [[ $attempt -lt 3 ]]; then
-            print_info "${L[api_retry]} ($attempt/3)"
-            systemctl restart x-ui 2>/dev/null || true
-            sleep 5
-        fi
-    done
-    print_error "${L[api_login_failed]}"
-    return 1
-}
-
-api_set_language() {
-    local lang_code="en"
-    [[ "$LANG_CHOICE" == "ru" ]] && lang_code="ru"
-
-    curl -sk -b /tmp/xui_cookie.txt "${API_BASE}/panel/setting/update" \
-        -H "Content-Type: application/json" \
-        -d "{\"webLang\": \"${lang_code}\"}" >/dev/null 2>&1 || true
-}
-
-api_create_inbound() {
-    local host="$SERVER_IP"
-    [[ "$MODE" == "domain" ]] && host="$DOMAIN"
-
-    # Certificate paths
-    if [[ "$MODE" == "domain" ]]; then
-        CERT_PATH="/root/cert/${DOMAIN}/fullchain.pem"
-        KEY_PATH="/root/cert/${DOMAIN}/privkey.pem"
-
-        # Wait for certs
-        local cert_wait=0
-        while [[ $cert_wait -lt 60 ]]; do
-            if [[ -f "$CERT_PATH" ]] && [[ -f "$KEY_PATH" ]]; then break; fi
-            if [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]]; then
-                CERT_PATH="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
-                KEY_PATH="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
-                break
-            fi
-            sleep 2
-            cert_wait=$((cert_wait + 2))
-        done
-
-        if [[ ! -f "$CERT_PATH" ]]; then
-            print_warning "Certificate not found, panel will use self-signed."
-            CERT_PATH=""
-            KEY_PATH=""
-        fi
-    else
-        CERT_PATH=""
-        KEY_PATH=""
-    fi
-
-    # Generate names
-    local names
-    names=$(generate_random_names 10)
-    local name_array=()
-    while IFS= read -r line; do
-        [[ -n "$line" ]] && name_array+=("$line")
-    done <<< "$names"
-
-    USER_NAMES=("${name_array[@]}")
-    USER_UUIDS=()
-
-    # Build clients JSON via python3 for safe escaping
-    local clients_arr=""
-    for i in $(seq 0 9); do
-        local uuid
-        uuid=$(cat /proc/sys/kernel/random/uuid)
-        USER_UUIDS+=("$uuid")
-        local sub_id
-        sub_id=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
-
-        [[ $i -gt 0 ]] && clients_arr+=","
-        clients_arr+="{\"id\":\"${uuid}\",\"flow\":\"xtls-rprx-vision\",\"email\":\"${name_array[$i]}\",\"limitIp\":0,\"totalGB\":0,\"expiryTime\":0,\"enable\":true,\"tgId\":\"\",\"subId\":\"${sub_id}\",\"reset\":0}"
-    done
-
-    # Use python3 to build the payload safely (no triple-quote injection risk)
-    local tls_sni="$host"
-    local allow_insecure="False"
-    local cert_file="${CERT_PATH}"
-    local key_file="${KEY_PATH}"
-    [[ "$MODE" == "ip" ]] && allow_insecure="True" && tls_sni=""
-
-    # Write clients JSON to temp file first (avoids shell injection in python)
-    echo "[${clients_arr}]" > /tmp/xuifast_clients.json
-
-    python3 - "$tls_sni" "$cert_file" "$key_file" "$allow_insecure" << 'PYEOF' || { print_error "${L[inbound_failed]}"; return 1; }
-import json, sys
-
-tls_sni = sys.argv[1]
-cert_file = sys.argv[2]
-key_file = sys.argv[3]
-allow_insecure = sys.argv[4] == "True"
-
-with open('/tmp/xuifast_clients.json') as f:
-    clients = json.load(f)
-
-settings = json.dumps({
-    'clients': clients,
-    'decryption': 'none',
-    'fallbacks': [{'dest': 80}]
-})
-
-stream = json.dumps({
-    'network': 'tcp',
-    'security': 'tls',
-    'tlsSettings': {
-        'serverName': tls_sni,
-        'minVersion': '1.2',
-        'maxVersion': '1.3',
-        'cipherSuites': '',
-        'rejectUnknownSni': False,
-        'disableSystemRoot': False,
-        'enableSessionResumption': False,
-        'certificates': [{'certificateFile': cert_file, 'keyFile': key_file, 'ocspStapling': 3600}],
-        'alpn': ['h2', 'http/1.1'],
-        'settings': {'allowInsecure': allow_insecure, 'fingerprint': 'chrome'}
-    },
-    'tcpSettings': {'acceptProxyProtocol': False, 'header': {'type': 'none'}}
-})
-
-sniffing = json.dumps({
-    'enabled': True,
-    'destOverride': ['http', 'tls', 'quic', 'fakedns'],
-    'metadataOnly': False,
-    'routeOnly': False
-})
-
-payload = {
-    'up': 0, 'down': 0, 'total': 0,
-    'remark': 'VLESS-TCP-XTLS',
-    'enable': True, 'expiryTime': 0,
-    'listen': '', 'port': 443, 'protocol': 'vless',
-    'settings': settings,
-    'streamSettings': stream,
-    'tag': 'inbound-443',
-    'sniffing': sniffing
-}
-
-json.dump(payload, open('/tmp/xuifast_payload.json', 'w'))
-PYEOF
-    rm -f /tmp/xuifast_clients.json
-
-    local http_code
-    http_code=$(curl -sk -w '%{http_code}' -o /dev/null \
-        -b /tmp/xui_cookie.txt "${API_BASE}/panel/api/inbounds/add" \
-        -H "Content-Type: application/json" \
-        -d @/tmp/xuifast_payload.json 2>/dev/null)
-
-    rm -f /tmp/xuifast_payload.json
-
-    if [[ "$http_code" != "200" ]]; then
-        print_error "${L[inbound_failed]} (HTTP $http_code)"
-        return 1
-    fi
-
-    # Save user data for recovery
-    {
+    while IFS='|' read -r num name link; do
+        echo -e "  ${CYAN}${num})${NC} ${BOLD}${name}${NC}"
+        echo -e "     ${GREEN}${link}${NC}"
         echo ""
-        echo "# VPN Users"
-        for i in $(seq 0 9); do
-            echo "USER_${i}=${USER_NAMES[$i]}|${USER_UUIDS[$i]}"
-        done
-    } >> "$CREDS_FILE"
-
-    return 0
+    done < <(show_all_users)
 }
 
-# ─────────────────────────────────────────────────────────────────────────────────
-#  GENERATE VLESS LINKS & QR
-# ─────────────────────────────────────────────────────────────────────────────────
-
-generate_vless_link() {
-    local uuid="$1"
-    local name="$2"
-    local host="$SERVER_IP"
-    [[ "$MODE" == "domain" ]] && host="$DOMAIN"
-
-    # URL-encode the name for the fragment (important for Russian names)
-    local encoded_name
-    encoded_name=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$name'))" 2>/dev/null || echo "$name")
-
-    local link="vless://${uuid}@${host}:443?type=tcp&security=tls&sni=${host}&fp=chrome&flow=xtls-rprx-vision"
-    [[ "$MODE" == "ip" ]] && link+="&allowInsecure=1"
-    link+="#${encoded_name}"
-    echo "$link"
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  CHECK CLIENT ONLINE STATUS
-# ─────────────────────────────────────────────────────────────────────────────────
-
-check_client_online() {
-    local email="$1"
-    local timeout=120
-    local elapsed=0
-
-    echo ""
-    printf "  ${DIM}${L[skip_hint]}${RESET}\n"
-    echo ""
-
-    while [[ $elapsed -lt $timeout ]]; do
-        # Check if user pressed Enter (non-blocking read)
-        if read -t 0.1 -r 2>/dev/null; then
-            return 2  # skipped
-        fi
-
-        local response
-        response=$(curl -sk -b /tmp/xui_cookie.txt "${API_BASE}/panel/api/inbounds/onlines" 2>/dev/null || true)
-
-        if [[ -n "$response" ]] && echo "$response" | grep -qF "$email" 2>/dev/null; then
-            return 0
-        fi
-
-        local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-        for ((f=0; f<50; f++)); do
-            local frame_idx=$(( f % ${#frames[@]} ))
-            local remaining=$(( timeout - elapsed ))
-            printf "\r  ${CYAN}${frames[$frame_idx]}${RESET} ${L[waiting_online]} ${DIM}(%ds)${RESET}  " "$remaining"
-            sleep 0.1
-        done
-
-        elapsed=$((elapsed + 5))
-    done
-
-    printf "\n"
-    return 1
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  DISPLAY CREDENTIALS
-# ─────────────────────────────────────────────────────────────────────────────────
-
-show_credentials() {
-    echo ""
-    printf "  ${GREEN}╔"
-    printf '═%.0s' $(seq 1 58)
-    printf "╗${RESET}\n"
-
-    printf "  ${GREEN}║${RESET}  ${BOLD}${WHITE}%-56s${RESET}${GREEN}║${RESET}\n" "${L[install_complete]}"
-    printf "  ${GREEN}║${RESET}  ${BOLD}${WHITE}%-56s${RESET}${GREEN}║${RESET}\n" "${L[login_title]}"
-
-    printf "  ${GREEN}╠"
-    printf '═%.0s' $(seq 1 58)
-    printf "╣${RESET}\n"
-
-    printf "  ${GREEN}║${RESET}  👤 %-16s ${BOLD}%-33s${RESET}${GREEN}║${RESET}\n" "${L[username]}:" "${XUI_USER}"
-    printf "  ${GREEN}║${RESET}  🔑 %-16s ${BOLD}%-33s${RESET}${GREEN}║${RESET}\n" "${L[password]}:" "${XUI_PASS}"
-    printf "  ${GREEN}║${RESET}  🔌 %-16s ${YELLOW}%-33s${RESET}${GREEN}║${RESET}\n" "${L[port]}:" "${XUI_PORT}"
-    printf "  ${GREEN}║${RESET}  📁 %-16s %-33s${GREEN}║${RESET}\n" "${L[panel_path]}:" "/${XUI_PATH}/"
-    printf "  ${GREEN}║${RESET}  🌐 %-16s ${RESET}${GREEN}║${RESET}\n" "${L[login_url]}:"
-    printf "  ${GREEN}║${RESET}  ${GREEN}${UNDERLINE}%-56s${RESET}${GREEN}║${RESET}\n" "${XUI_URL}"
-
-    printf "  ${GREEN}╠"
-    printf '═%.0s' $(seq 1 58)
-    printf "╣${RESET}\n"
-
-    printf "  ${GREEN}║${RESET}  ${CYAN}%-56s${RESET}${GREEN}║${RESET}\n" "${L[how_to_login]}"
-
-    printf "  ${GREEN}╠"
-    printf '═%.0s' $(seq 1 58)
-    printf "╣${RESET}\n"
-
-    printf "  ${GREEN}║${RESET}  ${YELLOW}⚠  ${BOLD}%-53s${RESET}${GREEN}║${RESET}\n" "${L[save_warning]}"
-
-    printf "  ${GREEN}╠"
-    printf '═%.0s' $(seq 1 58)
-    printf "╣${RESET}\n"
-
-    printf "  ${GREEN}║${RESET}  ${CYAN}ℹ  %-53s${RESET}${GREEN}║${RESET}\n" "${L[cert_info]}"
-
-    local cert_info
-    [[ "$MODE" == "domain" ]] && cert_info="${L[cert_domain_info]}" || cert_info="${L[cert_ip_info]}"
-
-    while IFS= read -r line; do
-        printf "  ${GREEN}║${RESET}     %-53s${GREEN}║${RESET}\n" "$line"
-    done <<< "$(echo -e "$cert_info")"
-
-    printf "  ${GREEN}║${RESET}%-58s${GREEN}║${RESET}\n" ""
-    printf "  ${GREEN}║${RESET}  ${GREEN}✅ %-53s${RESET}${GREEN}║${RESET}\n" "${L[ready]}"
-
-    printf "  ${GREEN}╚"
-    printf '═%.0s' $(seq 1 58)
-    printf "╝${RESET}\n"
-
-    echo ""
-    printf "  ${DIM}$(printf "${L[creds_saved]}" "$CREDS_FILE")${RESET}\n"
-    echo ""
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  APP DOWNLOAD
-# ─────────────────────────────────────────────────────────────────────────────────
-
-show_app_download() {
-    print_header "${L[download_happ]}"
-
-    printf "  ${WHITE}${L[choose_platform]}${RESET}\n\n"
-    printf "    ${CYAN}1)${RESET} 📱  ${L[ios]}\n"
-    printf "    ${CYAN}2)${RESET} 📱  ${L[android]}\n"
-    echo ""
-    read_choice "" 1 2
-    local platform_choice="$REPLY"
-
-    local app_url_ios="https://apps.apple.com/app/hiddify-proxy-vpn/id6596777532"
-    local app_url_android="https://play.google.com/store/apps/details?id=app.hiddify.com"
-
-    echo ""
-    print_separator
-
-    if [[ "$platform_choice" == "1" ]]; then
-        printf "\n  ${CYAN}📱 iOS — Hiddify (App Store):${RESET}\n\n"
-        show_qr "$app_url_ios"
-    else
-        printf "\n  ${CYAN}📱 Android — Hiddify (Google Play):${RESET}\n\n"
-        show_qr "$app_url_android"
-    fi
-
-    echo ""
-    print_separator
-    echo ""
-
-    printf "  ${DIM}${L[confirm_hint]}${RESET}\n"
-    while true; do
-        printf "  ${YELLOW}?${RESET} ${L[confirm_installed]} "
-        if confirm_yes; then
-            break
-        fi
-        print_info "${L[scan_qr_app]}"
-    done
-
-    print_success "OK!"
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  CONNECTION TEST
-# ─────────────────────────────────────────────────────────────────────────────────
-
-test_connection() {
-    # Ensure we have user data
-    if [[ ${#USER_UUIDS[@]} -eq 0 ]] || [[ ${#USER_NAMES[@]} -eq 0 ]]; then
-        print_warning "No user data available for testing."
-        return
-    fi
-
-    print_header "${L[test_connection]}"
-
-    printf "  ${CYAN}${L[scan_qr_config]}${RESET}\n\n"
-
-    local first_link
-    first_link=$(generate_vless_link "${USER_UUIDS[0]}" "${USER_NAMES[0]}")
-
-    show_qr "$first_link"
-
-    echo ""
-    print_separator
-    printf "  ${DIM}Link: %s${RESET}\n" "$first_link"
-    print_separator
-
-    # Refresh API cookie
-    api_login 2>/dev/null || true
-
-    local result
-    check_client_online "${USER_NAMES[0]}"
-    result=$?
-
-    if [[ $result -eq 0 ]]; then
-        printf "\r  ${GREEN}✓${RESET} ${BOLD}${GREEN}${L[client_online]}${RESET}                              \n"
-    elif [[ $result -eq 2 ]]; then
-        print_info "Skipped."
-    else
-        echo ""
-        printf "  ${DIM}"
-        echo -e "${L[client_timeout]}"
-        printf "${RESET}"
-    fi
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  SHOW ALL USERS
-# ─────────────────────────────────────────────────────────────────────────────────
-
-show_all_users() {
-    if [[ ${#USER_UUIDS[@]} -eq 0 ]]; then return; fi
-
-    echo ""
-    printf "  ${YELLOW}?${RESET} ${L[show_all_users_q]} [${L[yes]}/${L[no]}]: "
-    if ! confirm_yes; then
-        return
-    fi
-
-    print_header "${L[all_users_info]}"
-
-    for i in $(seq 0 $(( ${#USER_UUIDS[@]} - 1 )) ); do
-        local link
-        link=$(generate_vless_link "${USER_UUIDS[$i]}" "${USER_NAMES[$i]}")
-
-        printf "  ${WHITE}%2d.${RESET} ${BOLD}%s${RESET}\n" "$((i+1))" "${USER_NAMES[$i]}"
-        printf "      ${DIM}%s${RESET}\n" "$link"
-        echo ""
-    done
-}
-
-# ─────────────────────────────────────────────────────────────────────────────────
-#  MAIN FLOW
-# ─────────────────────────────────────────────────────────────────────────────────
-
-main() {
-    # ── Root check ──
-    if [[ "$EUID" -ne 0 ]]; then
-        echo -e "\n  ${RED}✗${RESET}  Run as root: ${BOLD}sudo bash xuifast.sh${RESET}\n"
-        exit 1
-    fi
-
+# ═══════════════════════════════════════════════════════════════════════
+# MAIN MENU (interactive, after installation)
+# ═══════════════════════════════════════════════════════════════════════
+show_dashboard() {
     clear
+    print_banner
 
-    # ╔═══════════════════════════════╗
-    # ║   WELCOME & LANG SELECT       ║
-    # ╚═══════════════════════════════╝
+    local mode xui_st nginx_st
+    mode=$(config_get mode "N/A")
+    xui_st=$(xui_status)
+    nginx_st=$(nginx_status)
 
-    echo ""
-    printf "${PURPLE}"
-    cat << 'BANNER'
-    ██╗  ██╗██╗   ██╗██╗███████╗ █████╗ ███████╗████████╗
-    ╚██╗██╔╝██║   ██║██║██╔════╝██╔══██╗██╔════╝╚══██╔══╝
-     ╚███╔╝ ██║   ██║██║█████╗  ███████║███████╗   ██║
-     ██╔██╗ ██║   ██║██║██╔══╝  ██╔══██║╚════██║   ██║
-    ██╔╝ ██╗╚██████╔╝██║██║     ██║  ██║███████║   ██║
-    ╚═╝  ╚═╝ ╚═════╝ ╚═╝╚═╝     ╚═╝  ╚═╝╚══════╝   ╚═╝
-BANNER
-    printf "${RESET}"
-    printf "\n  ${DIM}──────────── 3X-UI Professional Installer v2.1 ────────────${RESET}\n\n"
+    # Status indicators
+    local xui_icon nginx_icon
+    case "$xui_st" in
+        running) xui_icon="${GREEN}●${NC}" ;;
+        stopped) xui_icon="${YELLOW}○${NC}" ;;
+        *)       xui_icon="${RED}✗${NC}" ;;
+    esac
+    case "$nginx_st" in
+        running) nginx_icon="${GREEN}●${NC}" ;;
+        *)       nginx_icon="${RED}○${NC}" ;;
+    esac
 
-    printf "  ${WHITE}Выберите язык / Choose language:${RESET}\n\n"
-    printf "    ${CYAN}1)${RESET} 🇷🇺  Русский\n"
-    printf "    ${CYAN}2)${RESET} 🇬🇧  English\n"
-    echo ""
-    read_choice "" 1 2
+    echo -e "  ${BOLD}$(t dashboard_title)${NC}"
+    echo -e "  ${DIM}$(printf '─%.0s' {1..50})${NC}"
+    echo -e "  $(t svc_xui):  ${xui_icon} $(t $xui_st)    $(t svc_nginx): ${nginx_icon} $(t $nginx_st)"
 
-    if [[ "$REPLY" == "1" ]]; then
-        LANG_CHOICE="ru"
-        set_lang_ru
-    else
-        LANG_CHOICE="en"
-        set_lang_en
-    fi
+    local ip domain mask
+    ip=$(config_get server_ip "")
+    domain=$(config_get domain "")
+    mask=$(config_get mask_domain "")
 
-    print_success "${L[panel_lang_set]}: $([ "$LANG_CHOICE" == "ru" ] && echo "Русский" || echo "English")"
-    echo ""
-
-    # ── Get server IP (with validation) ──
-    SERVER_IP=""
-    for ip_service in ifconfig.me api.ipify.org icanhazip.com; do
-        local raw_ip
-        raw_ip=$(curl -s --max-time 10 "$ip_service" 2>/dev/null | tr -d '[:space:]')
-        if [[ "$raw_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            SERVER_IP="$raw_ip"
-            break
-        fi
-    done
-
-    if [[ -z "$SERVER_IP" ]]; then
-        print_error "Cannot detect server IP. Check internet connection."
-        exit 1
-    fi
-
-    # ╔═══════════════════════════════╗
-    # ║     MODE SELECTION             ║
-    # ╚═══════════════════════════════╝
-
-    print_header "${L[choose_mode]}"
-
-    printf "    ${CYAN}1)${RESET} 🌐  ${L[mode_ip]}\n"
-    printf "       ${DIM}${L[mode_ip_hint]}${RESET}\n\n"
-    printf "    ${CYAN}2)${RESET} 🔒  ${L[mode_domain]}\n"
-    printf "       ${DIM}${L[mode_domain_hint]}${RESET}\n"
-    echo ""
-    read_choice "" 1 2
-
-    if [[ "$REPLY" == "2" ]]; then
-        MODE="domain"
-        echo ""
-        # Domain input with validation
-        while true; do
-            printf "  ${CYAN}▸${RESET} ${L[enter_domain]}: "
-            read -r DOMAIN
-            DOMAIN=$(echo "$DOMAIN" | sed 's|https\?://||' | sed 's|/.*||' | tr -d '[:space:]')
-            if [[ -n "$DOMAIN" ]] && [[ "$DOMAIN" == *.* ]]; then
-                break
-            fi
-            print_warning "${L[domain_empty]}"
-        done
-
-        echo ""
-        if ! check_dns "$DOMAIN"; then
-            print_error "${L[domain_fail]}"
-            exit 1
-        fi
-    else
-        MODE="ip"
-    fi
-
-    echo ""
-
-    # ╔═══════════════════════════════╗
-    # ║   ALREADY INSTALLED CHECK      ║
-    # ╚═══════════════════════════════╝
-
-    if [[ -f "/usr/local/x-ui/x-ui" ]]; then
-        print_warning "${L[already_installed]}"
-        if extract_credentials; then
-            show_credentials
-        fi
-        exit 0
-    fi
-
-    # ╔═══════════════════════════════╗
-    # ║       INSTALLATION             ║
-    # ╚═══════════════════════════════╝
-
-    # Step 1: Dependencies
-    (
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq 2>/dev/null
-        apt-get install -y -qq expect qrencode curl sqlite3 dnsutils nginx python3 git 2>/dev/null
-    ) &
-    spinner $! "${L[installing_deps]}" || {
-        print_error "Dependencies installation failed"
-        exit 1
-    }
-
-    # Step 2: Deploy stub site
-    deploy_stub_site
-
-    # Step 3: Setup nginx
-    setup_nginx
-
-    # Step 4: Install 3x-ui (with progress message)
-    print_info "${L[installing_xui]}"
-    install_3xui
-    print_success "3X-UI installed"
-
-    # Step 5: Extract credentials
-    if ! extract_credentials; then
-        exit 1
-    fi
-
-    # Step 6: Wait for API
-    print_info "${L[configuring_vless]}"
-    if ! wait_for_api; then
-        print_warning "${L[api_login_failed]}"
-        systemctl restart x-ui 2>/dev/null || true
-        sleep 5
-        wait_for_api || true
-    fi
-
-    # Step 7: API login & configure
-    if api_login_with_retry; then
-        api_set_language
-        print_success "${L[panel_lang_set]}: $([ "$LANG_CHOICE" == "ru" ] && echo "Русский" || echo "English")"
-    fi
-
-    # Step 8: Reconfigure nginx as fallback
-    setup_fallback_nginx
-
-    # Step 9: Create VLESS inbound with 10 users
-    print_info "${L[creating_users]}"
-    if api_create_inbound; then
-        print_success "10 ${L[users_created]}"
-    fi
-
-    # ╔═══════════════════════════════╗
-    # ║         RESULTS                ║
-    # ╚═══════════════════════════════╝
-
-    show_credentials
-    wait_enter
-
-    # App download
-    show_app_download
-
-    # Connection test
-    test_connection
-
-    # Final
-    echo ""
-    print_separator
-    printf "\n  ${GREEN}${BOLD}"
-    echo -e "${L[final_message]}"
-    printf "${RESET}\n"
-    print_separator
-
-    # Optional: show all users
-    show_all_users
-
-    # Cleanup
-    rm -f /tmp/xui_cookie.txt
-
-    printf "  ${DIM}$([ "$LANG_CHOICE" == "ru" ] && echo "Скрипт завершён. Удачи!" || echo "Done. Good luck!")${RESET}\n\n"
+    echo -e "  $(t net_mode)    ${CYAN}${mode}${NC}"
+    [ -n "$ip" ] && echo -e "  $(t net_ip)      ${CYAN}${ip}${NC}"
+    [ -n "$domain" ] && echo -e "  $(t net_domain)  ${CYAN}${domain}${NC}"
+    [ -n "$mask" ] && echo -e "  $(t config_mask) ${CYAN}${mask}${NC}"
+    echo -e "  ${DIM}$(printf '─%.0s' {1..50})${NC}"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────────
-#  ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────────
+main_menu() {
+    while true; do
+        show_dashboard
+
+        echo ""
+        echo -e "  ${CYAN}1)${NC} $(t menu_proxy)"
+        echo -e "  ${CYAN}2)${NC} $(t menu_users)"
+        echo -e "  ${CYAN}3)${NC} $(t menu_manage)"
+        echo -e "  ${CYAN}4)${NC} $(t menu_about)"
+        echo -e "  ${CYAN}0)${NC} $(t exit)"
+        echo ""
+        echo -e "  ${DIM}$(t auto_refresh_30s)${NC}"
+
+        local choice
+        read -t 30 -rp "  ▸ " choice || { echo ""; continue; }
+
+        case "$choice" in
+            1) submenu_proxy ;;
+            2) show_all_users_formatted; echo -ne "  $(t press_enter_return) "; read -r ;;
+            3) submenu_manage ;;
+            4) submenu_about ;;
+            0) echo -e "  $(t bye)"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# ── Submenu: Proxy ──────────────────────────────────────────────────────
+submenu_proxy() {
+    print_header "$(t submenu_proxy_title)"
+    echo -e "  ${CYAN}1)${NC} $(t proxy_install_update)"
+    echo -e "  ${CYAN}2)${NC} $(t proxy_show_links)"
+    echo -e "  ${CYAN}3)${NC} $(t proxy_show_qr)"
+    echo -e "  ${CYAN}4)${NC} $(t proxy_restart)"
+    echo -e "  ${CYAN}5)${NC} $(t proxy_logs)"
+    echo -e "  ${CYAN}6)${NC} $(t proxy_change_mode)"
+    echo -e "  ${CYAN}0)${NC} $(t back)"
+    echo ""
+
+    local choice
+    read -rp "  ▸ " choice
+    case "$choice" in
+        1) select_and_install ;;
+        2) show_all_users_formatted ;;
+        3)
+            if [ -f /tmp/xuifast_links.json ]; then
+                while IFS='|' read -r num name link; do
+                    show_user_link "$name" "$link"
+                done < <(show_all_users)
+            fi
+            ;;
+        4) restart_xui ;;
+        5) xui_logs 50 ;;
+        6) select_and_install ;;
+        0) return ;;
+    esac
+    echo -ne "  $(t press_enter_return) "
+    read -r
+}
+
+# ── Submenu: Manage ─────────────────────────────────────────────────────
+submenu_manage() {
+    print_header "$(t submenu_manage_title)"
+    echo -e "  ${CYAN}1)${NC} $(t manage_language)"
+    echo -e "  ${CYAN}2)${NC} $(t proxy_restart)"
+    echo -e "  ${CYAN}3)${NC} $(t manage_remove)"
+    echo -e "  ${CYAN}0)${NC} $(t back)"
+    echo ""
+
+    local choice
+    read -rp "  ▸ " choice
+    case "$choice" in
+        1)
+            local new_lang
+            new_lang=$(pick_language_interactive)
+            load_language "$new_lang"
+            save_language "$new_lang"
+            ;;
+        2) restart_xui ;;
+        3)
+            if confirm "$(t remove_confirm)"; then
+                remove_all
+            fi
+            ;;
+        0) return ;;
+    esac
+    echo -ne "  $(t press_enter_return) "
+    read -r
+}
+
+# ── Submenu: About ──────────────────────────────────────────────────────
+submenu_about() {
+    print_header "$(t submenu_about_title)"
+    echo -e "  XUIFAST:    v${XUIFAST_VERSION}"
+    echo -e "  Engine:     3X-UI + Xray-core"
+    echo -e "  Protocol:   VLESS + XTLS-Vision"
+    echo -e "  Security:   Reality / TLS"
+    echo -e "  Author:     anten-ka"
+    echo -e "  GitHub:     github.com/anten-ka"
+    echo -e "  YouTube:    youtube.com/@anten-ka"
+    show_credits
+    echo -ne "  $(t press_enter_return) "
+    read -r
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# MODE SELECTION
+# ═══════════════════════════════════════════════════════════════════════
+select_and_install() {
+    print_header "$(t install_select_mode)"
+    echo ""
+    echo -e "  ${CYAN}1)${NC} ${BOLD}$(t install_lite_title)${NC}"
+    echo -e "     ${DIM}$(t install_lite_desc1)${NC}"
+    echo -e "     ${DIM}$(t install_lite_desc2)${NC}"
+    echo -e "     ${DIM}$(t install_lite_desc3)${NC}"
+    echo ""
+    echo -e "  ${CYAN}2)${NC} ${BOLD}$(t install_pro_title)${NC}"
+    echo -e "     ${DIM}$(t install_pro_desc1)${NC}"
+    echo -e "     ${DIM}$(t install_pro_desc2)${NC}"
+    echo -e "     ${DIM}$(t install_pro_desc3)${NC}"
+    echo ""
+
+    local mode_choice
+    echo -ne "  $(t install_mode_choice) "
+    read -r mode_choice
+
+    case "$mode_choice" in
+        1) install_lite ;;
+        2) install_pro ;;
+        *) log_error "$(t invalid_choice)"; return 1 ;;
+    esac
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# ENTRY POINT
+# ═══════════════════════════════════════════════════════════════════════
+main() {
+    init_language
+    print_banner
+
+    # Check disk space
+    if ! check_disk_space 500; then
+        local avail
+        avail=$(df -m / 2>/dev/null | awk 'NR==2 {print $4}')
+        log_error "$(tf err_low_disk "${avail:-?}" "500")"
+        exit 1
+    fi
+
+    # If already installed — show menu
+    if is_xui_installed && [ -f "$XUIFAST_CONFIG" ]; then
+        load_credentials
+        main_menu
+    else
+        # First run — install
+        select_and_install
+    fi
+}
+
 main "$@"
