@@ -8,6 +8,7 @@ install_3xui() {
 
     if [ -f "$XUI_BIN" ]; then
         log_dim "$(t xui_already_installed)"
+        return 0
     fi
 
     local install_log="/tmp/xuifast_xui_install.log"
@@ -99,8 +100,8 @@ extract_credentials() {
     XUI_PORT="$port"
     XUI_WEB_PATH="$web_path"
 
-    # Save credentials file
-    save_credentials
+    # Normalize web_path: ensure leading /
+    [[ "$XUI_WEB_PATH" != /* ]] && XUI_WEB_PATH="/${XUI_WEB_PATH}"
 }
 
 # ── Save credentials to file ───────────────────────────────────────────

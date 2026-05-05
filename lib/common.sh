@@ -78,12 +78,13 @@ run_with_spinner() {
 # ── Progress bar ────────────────────────────────────────────────────────
 progress_bar() {
     local current=$1 total=$2 width=${3:-40}
+    [ "$total" -eq 0 ] && return 0
     local pct=$((current * 100 / total))
     local filled=$((current * width / total))
     local empty=$((width - filled))
-    printf "\r  ${CYAN}[${NC}"
-    printf "%0.s█" $(seq 1 $filled 2>/dev/null) 2>/dev/null
-    printf "%0.s░" $(seq 1 $empty 2>/dev/null) 2>/dev/null
+    printf "\r  ${CYAN}[${NC}" >&2
+    [ "$filled" -gt 0 ] && printf "%0.s█" $(seq 1 $filled) >&2
+    [ "$empty" -gt 0 ] && printf "%0.s░" $(seq 1 $empty) >&2
     printf "${CYAN}]${NC} %3d%%" "$pct" >&2
 }
 
@@ -113,8 +114,7 @@ read_choice() {
 # ── OS & arch detection ─────────────────────────────────────────────────
 get_os() {
     if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        echo "${ID:-linux}"
+        (. /etc/os-release && echo "${ID:-linux}")
     else
         uname -s | tr '[:upper:]' '[:lower:]'
     fi
@@ -183,7 +183,7 @@ install_dependencies() {
     done
 
     if [ ${#missing[@]} -gt 0 ]; then
-        log_info "$(t deps_installing "${missing[*]}")"
+        log_info "$(tf deps_installing "${missing[*]}")"
         apt_update
         apt_install "${missing[@]}" || {
             log_error "Failed to install: ${missing[*]}"
@@ -278,8 +278,8 @@ check_dns() {
     local domain="$1"
     local expected_ip="$2"
     local resolved
-    resolved=$(dig +short "$domain" A 2>/dev/null | tail -1)
-    [[ "$resolved" == "$expected_ip" ]]
+    resolved=$(dig +short "$domain" A 2>/dev/null)
+    echo "$resolved" | grep -qFx "$expected_ip"
 }
 
 # ── JSON config management ──────────────────────────────────────────────
@@ -341,12 +341,16 @@ config_set_int() {
 # ── Random generation ───────────────────────────────────────────────────
 random_hex() {
     local len="${1:-16}"
-    openssl rand -hex "$((len / 2))" 2>/dev/null | head -c "$len"
+    openssl rand -hex "$(( (len + 1) / 2 ))" 2>/dev/null | head -c "$len"
 }
 
 random_port() {
     local min="${1:-10000}" max="${2:-65000}"
-    echo $(( RANDOM % (max - min) + min ))
+    if command -v shuf &>/dev/null; then
+        shuf -i "${min}-${max}" -n 1
+    else
+        echo $(( RANDOM % (max - min) + min ))
+    fi
 }
 
 random_string() {

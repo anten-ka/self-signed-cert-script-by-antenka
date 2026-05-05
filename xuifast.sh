@@ -73,6 +73,7 @@ install_lite() {
 
     # 5. Extract credentials
     extract_credentials
+    save_credentials
     setup_api_base
 
     # 6. Wait for API
@@ -89,13 +90,13 @@ install_lite() {
 
     # 10. Generate 10 users
     log_info "$(tf users_creating 10)"
-    generate_clients 10 "lite"
+    generate_clients 10 "lite" || return 1
 
     # 11. Create Reality inbound
     api_create_reality_inbound "$mask_domain" || return 1
 
     # 12. Generate VLESS links
-    generate_all_vless_links "lite" "$server_ip" "$mask_domain"
+    generate_all_vless_links "lite" "$server_ip" "$mask_domain" || return 1
 
     # 13. Setup stub nginx (optional, for port 80)
     setup_lite_nginx
@@ -113,10 +114,7 @@ install_lite() {
     config_set "reality_private_key" "$REALITY_PRIVATE_KEY"
     config_set "reality_public_key" "$REALITY_PUBLIC_KEY"
 
-    # 16. Save credentials
-    save_credentials
-
-    # 17. Done!
+    # 16. Done!
     echo ""
     echo -e "  ${GREEN}${BOLD}════════════════════════════════════════════════════${NC}"
     echo -e "  ${GREEN}${BOLD}  $(tf install_done "$XUIFAST_VERSION" "Lite")${NC}"
@@ -211,6 +209,7 @@ install_pro() {
 
     # 11. Extract credentials
     extract_credentials
+    save_credentials
     setup_api_base
 
     # 12. Wait for API
@@ -224,7 +223,7 @@ install_pro() {
 
     # 15. Generate 10 users
     log_info "$(tf users_creating 10)"
-    generate_clients 10 "pro"
+    generate_clients 10 "pro" || return 1
 
     # 16. Create TLS inbound
     local cert_file="/etc/letsencrypt/live/${domain}/fullchain.pem"
@@ -232,7 +231,7 @@ install_pro() {
     api_create_tls_inbound "$domain" "$cert_file" "$key_file" || return 1
 
     # 17. Generate VLESS links
-    generate_all_vless_links "pro" "$domain"
+    generate_all_vless_links "pro" "$domain" || return 1
 
     # 18. Save config
     config_set "mode" "pro"
@@ -244,10 +243,7 @@ install_pro() {
     config_set "version" "$XUIFAST_VERSION"
     config_set "installed_at" "$(date -Iseconds)"
 
-    # 19. Save credentials
-    save_credentials
-
-    # 20. Done!
+    # 19. Done!
     echo ""
     echo -e "  ${GREEN}${BOLD}════════════════════════════════════════════════════${NC}"
     echo -e "  ${GREEN}${BOLD}  $(tf install_done "$XUIFAST_VERSION" "Pro")${NC}"
@@ -301,8 +297,10 @@ post_install_flow() {
                 echo -e "  $(tf test_online "$first_email")"
                 break
             fi
-            printf "\r  $(tf test_offline "$first_email") (%ds)" "$elapsed" >&2
-            read -t 5 -r && break  # Enter to skip
+            local _msg
+            _msg=$(tf test_offline "$first_email")
+            printf "\r  %s (%ds)" "$_msg" "$elapsed" >&2
+            read -t 5 -r </dev/tty && break  # Enter to skip
             elapsed=$((elapsed + 5))
         done
         echo ""
@@ -393,7 +391,7 @@ show_dashboard() {
 
     echo -e "  ${BOLD}$(t dashboard_title)${NC}"
     echo -e "  ${DIM}$(printf '─%.0s' {1..50})${NC}"
-    echo -e "  $(t svc_xui):  ${xui_icon} $(t $xui_st)    $(t svc_nginx): ${nginx_icon} $(t $nginx_st)"
+    echo -e "  $(t svc_xui):  ${xui_icon} $(t "$xui_st")    $(t svc_nginx): ${nginx_icon} $(t "$nginx_st")"
 
     local ip domain mask
     ip=$(config_get server_ip "")

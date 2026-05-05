@@ -77,7 +77,7 @@ server {
 EONGINX
 
     local escaped_domain
-    escaped_domain=$(printf '%s\n' "$domain" | sed 's/[&/\]/\\&/g')
+    escaped_domain=$(printf '%s\n' "$domain" | sed 's/[|&/\]/\\&/g')
     sed -i "s|DOMAIN_PLACEHOLDER|${escaped_domain}|g" "$NGINX_SITE_CONF"
 
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null
@@ -304,7 +304,7 @@ setup_pro_website() {
     obtain_ssl_certificate "$domain" "$email" || return 1
 
     # 5. Generate nginx config
-    generate_nginx_pro_config "$domain"
+    generate_nginx_pro_config "$domain" || return 1
 
     # 6. Test and restart nginx
     if nginx -t 2>/dev/null; then
@@ -318,8 +318,6 @@ setup_pro_website() {
 
     # 7. Auto-renewal
     setup_ssl_auto_renewal
-
-    show_credits
 
     log_success "Pro website ready: http://${domain}"
     return 0

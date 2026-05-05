@@ -72,15 +72,23 @@ api_login() {
     local cookie_file="${1:-/tmp/xuifast_cookie.txt}"
 
     local http_code
-    http_code=$(curl -sk -w '%{http_code}' -o /dev/null \
+    http_code=$(curl -sk -w '%{http_code}' -o /tmp/xuifast_login_resp.json \
         -c "$cookie_file" \
         "${API_BASE}/login" \
         --data-urlencode "username=${XUI_USER}" \
         --data-urlencode "password=${XUI_PASS}" 2>/dev/null)
 
     if [ "$http_code" = "200" ]; then
-        log_success "$(t api_login_ok)"
-        return 0
+        # 3X-UI returns 200 even on wrong creds — check JSON success field
+        local success
+        success=$(python3 -c "import json; d=json.load(open('/tmp/xuifast_login_resp.json')); print(d.get('success', False))" 2>/dev/null || echo "False")
+        if [ "$success" = "True" ]; then
+            log_success "$(t api_login_ok)"
+            return 0
+        else
+            log_error "$(t api_login_fail) — wrong credentials"
+            return 1
+        fi
     else
         log_error "$(t api_login_fail) (HTTP $http_code)"
         return 1
@@ -118,11 +126,15 @@ api_set_language() {
 
 # ── Create VLESS Reality inbound (Lite mode) ────────────────────────────
 api_create_reality_inbound() {
-    local mask_domain="$1"      # e.g. "google.com"
-    local clients_json="$2"     # JSON array of clients
-    local cookie_file="${3:-/tmp/xuifast_cookie.txt}"
+    local mask_domain="$1"
+    local cookie_file="${2:-/tmp/xuifast_cookie.txt}"
 
     log_info "$(t api_creating_inbound)"
+
+    # Validate prerequisites
+    [ -f /tmp/xuifast_clients.json ] || { log_error "Clients file not found"; return 1; }
+    [ -n "$REALITY_PRIVATE_KEY" ] || { log_error "Reality private key not set"; return 1; }
+    [ -n "$REALITY_PUBLIC_KEY" ] || { log_error "Reality public key not set"; return 1; }
 
     # Build the payload using Python (injection-safe)
     python3 - "$mask_domain" "$REALITY_PRIVATE_KEY" "$REALITY_PUBLIC_KEY" << 'PYEOF'
@@ -195,7 +207,8 @@ payload = {
     "allocate": json.dumps({"strategy": "always", "refresh": 5, "concurrency": 3})
 }
 
-json.dump(payload, open('/tmp/xuifast_payload.json', 'w'))
+with open('/tmp/xuifast_payload.json', 'w') as f:
+    json.dump(payload, f)
 PYEOF
 
     if [ $? -ne 0 ]; then
@@ -204,7 +217,7 @@ PYEOF
     fi
 
     # Send the request
-    local response http_code
+    local http_code
     http_code=$(curl -sk -w '%{http_code}' -o /tmp/xuifast_api_resp.json \
         -b "$cookie_file" \
         -X POST "${API_BASE}/panel/api/inbounds/add" \
@@ -230,10 +243,12 @@ api_create_tls_inbound() {
     local domain="$1"           # e.g. "example.com"
     local cert_file="$2"        # /etc/letsencrypt/live/$domain/fullchain.pem
     local key_file="$3"         # /etc/letsencrypt/live/$domain/privkey.pem
-    local clients_json="$4"     # JSON array of clients
-    local cookie_file="${5:-/tmp/xuifast_cookie.txt}"
+    local cookie_file="${4:-/tmp/xuifast_cookie.txt}"
 
     log_info "$(t api_creating_inbound)"
+
+    # Validate prerequisites
+    [ -f /tmp/xuifast_clients.json ] || { log_error "Clients file not found"; return 1; }
 
     python3 - "$domain" "$cert_file" "$key_file" << 'PYEOF'
 import json, sys
@@ -306,7 +321,8 @@ payload = {
     "allocate": json.dumps({"strategy": "always", "refresh": 5, "concurrency": 3})
 }
 
-json.dump(payload, open('/tmp/xuifast_payload.json', 'w'))
+with open('/tmp/xuifast_payload.json', 'w') as f:
+    json.dump(payload, f)
 PYEOF
 
     if [ $? -ne 0 ]; then
@@ -343,14 +359,16 @@ generate_clients() {
     local used_names=""
 
     # Generate unique names
+    declare -A seen_names
     while [ ${#names[@]} -lt "$count" ]; do
         local name
         name=$(generate_random_name)
-        if ! echo "$used_names" | grep -qF "$name"; then
+        if [ -z "${seen_names[$name]+x}" ]; then
             names+=("$name")
-            used_names="${used_names}${name}\n"
+            seen_names[$name]=1
         fi
     done
+    unset seen_names
 
     # Build JSON array with Python
     local flow="xtls-rprx-vision"
@@ -381,12 +399,19 @@ for name in names:
     client["flow"] = flow
     clients.append(client)
 
-json.dump(clients, open('/tmp/xuifast_clients.json', 'w'))
+with open('/tmp/xuifast_clients.json', 'w') as f:
+    json.dump(clients, f)
 
 # Also save name→uuid mapping for VLESS link generation
 mapping = {c["email"]: c["id"] for c in clients}
-json.dump(mapping, open('/tmp/xuifast_users_map.json', 'w'))
+with open('/tmp/xuifast_users_map.json', 'w') as f:
+    json.dump(mapping, f)
 PYEOF
+
+    if [ $? -ne 0 ]; then
+        log_error "Failed to generate clients"
+        return 1
+    fi
 }
 
 # ── Generate VLESS link ─────────────────────────────────────────────────
@@ -399,7 +424,7 @@ generate_vless_link_reality() {
     local short_id="$6"
 
     local encoded_name
-    encoded_name=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$name'))" 2>/dev/null || echo "$name")
+    encoded_name=$(python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))" "$name" 2>/dev/null || echo "$name")
 
     echo "vless://${uuid}@${server_ip}:443?type=tcp&security=reality&pbk=${public_key}&fp=chrome&sni=${mask_domain}&sid=${short_id}&spx=%2F&flow=xtls-rprx-vision#${encoded_name}"
 }
@@ -410,7 +435,7 @@ generate_vless_link_tls() {
     local domain="$3"
 
     local encoded_name
-    encoded_name=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$name'))" 2>/dev/null || echo "$name")
+    encoded_name=$(python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))" "$name" 2>/dev/null || echo "$name")
 
     echo "vless://${uuid}@${domain}:443?type=tcp&security=tls&sni=${domain}&alpn=h2%2Chttp%2F1.1&fp=chrome&flow=xtls-rprx-vision#${encoded_name}"
 }
@@ -474,14 +499,8 @@ for name, uuid in users.items():
         )
     links[name] = link
 
-json.dump(links, open('/tmp/xuifast_links.json', 'w'), indent=2)
-
-# Also append to credentials file
-with open('/root/.xuifast_credentials', 'a') as f:
-    f.write('\n# VPN Users\n')
-    for i, (name, link) in enumerate(links.items(), 1):
-        f.write(f'USER_{i}_NAME={name}\n')
-        f.write(f'USER_{i}_LINK={link}\n')
+with open('/tmp/xuifast_links.json', 'w') as f:
+    json.dump(links, f, indent=2)
 PYEOF
 
     log_success "VLESS links generated"

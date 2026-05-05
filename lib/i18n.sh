@@ -42,7 +42,12 @@ t() {
 # ── Translate + printf formatting ───────────────────────────────────────
 tf() {
     local key="$1"; shift
-    local fmt="${I18N[$key]:-$key}"
+    local fmt="${I18N[$key]:-}"
+    if [ -z "$fmt" ]; then
+        # Key not found — print key name and args literally
+        echo "$key $*"
+        return
+    fi
     # shellcheck disable=SC2059
     printf "$fmt" "$@"
 }
