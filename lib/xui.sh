@@ -185,19 +185,34 @@ install_3xui() {
     fi
 
     # Run the official installer with expect for automated interaction
-    # Key: answer "n" to customization prompts (port, path, username)
-    # to keep defaults, "y" to other confirmation prompts
+    # 3X-UI v3.x prompts: customize port/path/user, SSL setup, IPv6
+    # Strategy: decline customization, skip SSL (we handle it ourselves),
+    # skip IPv6, accept general confirmations
     expect << EXPECT_EOF > "$install_log" 2>&1
 set timeout 300
 spawn bash -c "${install_cmd}"
 
 # Handle prompts from the 3X-UI installer
+# Order matters: more specific patterns MUST come before generic ones
 expect {
     -re "customize|Customize" {
         # "Would you like to customize the Panel Port/Path/Username?"
         # Answer "n" to use random/default values
         sleep 1
         send "n\r"
+        exp_continue
+    }
+    -re "Choose an option|choose an option|default.*for" {
+        # SSL Certificate Setup menu (v3.x): options 1-4
+        # Send "4" to skip SSL — XUIFAST manages SSL itself
+        sleep 1
+        send "4\r"
+        exp_continue
+    }
+    -re "IPv6|ipv6|leave empty" {
+        # "Do you have an IPv6 address to include?"
+        sleep 1
+        send "\r"
         exp_continue
     }
     -re "y/n|Y/N|y/N|yes/no" {
