@@ -47,6 +47,18 @@ I18N[net_mode]="Mode:"
 I18N[net_domain]="Domain:"
 I18N[net_users]="Users:"
 I18N[vpn_not_configured]="VPN not configured. Select option 1."
+I18N[dashboard_xui_ver]="3X-UI:"
+
+# ── 3X-UI version selection ────────────────────────────────────────────
+I18N[xui_version_title]="Select 3X-UI panel version"
+I18N[xui_version_detecting]="Detecting latest versions..."
+I18N[xui_version_new_gen]="New Generation"
+I18N[xui_version_new_desc]="Vue 3 frontend, new API, modern UI (recommended)"
+I18N[xui_version_legacy]="Legacy (stable)"
+I18N[xui_version_legacy_desc]="Classic UI, battle-tested, proven stability"
+I18N[xui_version_choice]="Your choice [1/2]:"
+I18N[xui_version_selected]="Selected: %s"
+I18N[xui_installing_version]="Installing 3X-UI %s..."
 
 # ── Install flow ───────────────────────────────────────────────────────
 I18N[install_select_mode]="🎭 Select stealth mode:"

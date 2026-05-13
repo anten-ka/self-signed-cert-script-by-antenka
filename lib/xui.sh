@@ -1,9 +1,121 @@
 #!/bin/bash
-# XUIFAST v3.0.0 — 3X-UI installation and service management
+# XUIFAST v3.0.2 — 3X-UI installation and service management
 # Install via expect, extract credentials, systemd management
+# Supports both 3.x (New Generation) and 2.x (Legacy) branches
+
+# ── 3X-UI version globals ──────────────────────────────────────────────
+XUI_BRANCH=""          # "new" (3.x) or "legacy" (2.x)
+XUI_INSTALL_VERSION="" # e.g. "v3.0.1" or "v2.9.4" or "" (latest)
+XUI_LEGACY_FALLBACK="v2.9.4"  # hardcoded fallback if GitHub API unreachable
+
+# ── Get latest 2.x version from GitHub API ─────────────────────────────
+get_latest_2x_version() {
+    local version=""
+    # Query GitHub API for releases, find last 2.x
+    version=$(curl -s --max-time 10 \
+        "https://api.github.com/repos/MHSanaei/3x-ui/releases?per_page=30" 2>/dev/null \
+        | python3 -c "
+import json, sys
+try:
+    releases = json.load(sys.stdin)
+    for r in releases:
+        tag = r.get('tag_name', '')
+        if tag.startswith('v2.') and not r.get('prerelease', False):
+            print(tag)
+            break
+except:
+    pass
+" 2>/dev/null || true)
+
+    if [[ "$version" =~ ^v2\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$version"
+        return 0
+    fi
+
+    # Fallback to hardcoded
+    echo "$XUI_LEGACY_FALLBACK"
+}
+
+# ── Get latest 3.x version from GitHub API ─────────────────────────────
+get_latest_3x_version() {
+    local version=""
+    version=$(curl -s --max-time 10 \
+        "https://api.github.com/repos/MHSanaei/3x-ui/releases?per_page=10" 2>/dev/null \
+        | python3 -c "
+import json, sys
+try:
+    releases = json.load(sys.stdin)
+    for r in releases:
+        tag = r.get('tag_name', '')
+        if tag.startswith('v3.') and not r.get('prerelease', False):
+            print(tag)
+            break
+except:
+    pass
+" 2>/dev/null || true)
+
+    if [[ "$version" =~ ^v3\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$version"
+        return 0
+    fi
+
+    # No version found — use latest (master branch)
+    echo ""
+}
+
+# ── Interactive 3X-UI version picker ───────────────────────────────────
+select_xui_version() {
+    echo "" >&2
+    echo -e "  ${BOLD}${WHITE}$(t xui_version_title)${NC}" >&2
+    echo -e "  ${DIM}$(printf '─%.0s' {1..55})${NC}" >&2
+    echo "" >&2
+
+    # Detect latest versions (with spinner)
+    local legacy_ver new_ver
+    log_dim "$(t xui_version_detecting)" >&2
+    legacy_ver=$(get_latest_2x_version)
+    new_ver=$(get_latest_3x_version)
+
+    local new_label="3X-UI 3.x"
+    [ -n "$new_ver" ] && new_label="3X-UI ${new_ver}"
+    local legacy_label="3X-UI ${legacy_ver}"
+
+    echo -e "  ${CYAN}1)${NC} ${BOLD}${new_label}${NC} — $(t xui_version_new_gen)" >&2
+    echo -e "     ${DIM}$(t xui_version_new_desc)${NC}" >&2
+    echo "" >&2
+    echo -e "  ${CYAN}2)${NC} ${BOLD}${legacy_label}${NC} — $(t xui_version_legacy)" >&2
+    echo -e "     ${DIM}$(t xui_version_legacy_desc)${NC}" >&2
+    echo "" >&2
+
+    local choice
+    echo -ne "  $(t xui_version_choice) " >&2
+    read -r choice
+
+    case "$choice" in
+        1)
+            XUI_BRANCH="new"
+            XUI_INSTALL_VERSION="${new_ver}"
+            log_success "$(tf xui_version_selected "$new_label")" >&2
+            ;;
+        2)
+            XUI_BRANCH="legacy"
+            XUI_INSTALL_VERSION="${legacy_ver}"
+            log_success "$(tf xui_version_selected "$legacy_label")" >&2
+            ;;
+        *)
+            # Default to new
+            XUI_BRANCH="new"
+            XUI_INSTALL_VERSION="${new_ver}"
+            log_dim "$(tf xui_version_selected "$new_label (default)")" >&2
+            ;;
+    esac
+}
 
 # ── Install 3X-UI via expect ────────────────────────────────────────────
+# Usage: install_3xui [version]
+# version: "v3.0.1", "v2.9.4", or "" for latest
 install_3xui() {
+    local version="${1:-$XUI_INSTALL_VERSION}"
     log_step "$(t xui_installing)"
 
     if [ -f "$XUI_BIN" ]; then
@@ -12,11 +124,21 @@ install_3xui() {
     fi
 
     local install_log="/tmp/xuifast_xui_install.log"
+    local install_cmd
+
+    if [ -n "$version" ]; then
+        # Pin to specific version
+        log_info "$(tf xui_installing_version "$version")"
+        install_cmd="VERSION=${version} && bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/\${VERSION}/install.sh) \${VERSION}"
+    else
+        # Latest (master branch)
+        install_cmd="bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)"
+    fi
 
     # Run the official installer with expect for automated interaction
-    expect << 'EXPECT_EOF' > "$install_log" 2>&1
+    expect << EXPECT_EOF > "$install_log" 2>&1
 set timeout 300
-spawn bash -c "bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)"
+spawn bash -c "${install_cmd}"
 
 # Accept any confirmation prompts
 expect {
@@ -30,7 +152,7 @@ expect {
         send "\r"
         exp_continue
     }
-    -re "\\$" {
+    -re "\\\\$" {
         # Shell prompt — installation finished
     }
     eof {}

@@ -65,46 +65,51 @@ install_lite() {
 
     confirm "$(t config_confirm)" || return 0
 
-    # 3. Install dependencies
+    # 3. Select 3X-UI version (Legacy 2.x or New 3.x)
+    select_xui_version
+
+    # 4. Install dependencies
     install_dependencies || return 1
 
-    # 4. Install 3X-UI
+    # 5. Install 3X-UI (version selected in step 3)
     install_3xui || return 1
 
-    # 5. Extract credentials
+    # 6. Extract credentials
     extract_credentials
     save_credentials
     setup_api_base
 
-    # 6. Wait for API
+    # 7. Wait for API
     run_with_spinner "$(t api_waiting)" wait_for_api 90 || return 1
 
-    # 7. Login
+    # 8. Login
     api_login_with_retry || return 1
 
-    # 8. Set panel language
+    # 9. Set panel language
     api_set_language "$LANG_CODE"
 
-    # 9. Generate Reality keypair
+    # 10. Generate Reality keypair
     generate_reality_keypair || return 1
 
-    # 10. Generate 10 users
+    # 11. Generate 10 users
     log_info "$(tf users_creating 10)"
     generate_clients 10 "lite" || return 1
 
-    # 11. Create Reality inbound
+    # 12. Create Reality inbound
     api_create_reality_inbound "$mask_domain" || return 1
 
-    # 12. Generate VLESS links
+    # 13. Generate VLESS links
     generate_all_vless_links "lite" "$server_ip" "$mask_domain" || return 1
 
-    # 13. Setup stub nginx (optional, for port 80)
+    # 14. Setup stub nginx (optional, for port 80)
     setup_lite_nginx || log_warning "$(t lite_nginx_optional_fail)"
 
-    # 14. Save config
+    # 15. Save config
     config_set "mode" "lite"
     config_set "mask_domain" "$mask_domain"
     config_set "server_ip" "$server_ip"
+    config_set "xui_branch" "$XUI_BRANCH"
+    [ -n "$XUI_INSTALL_VERSION" ] && config_set "xui_version" "$XUI_INSTALL_VERSION"
     config_set_int "port" 443
     config_set_int "users_count" 10
     config_set "version" "$XUIFAST_VERSION"
@@ -181,10 +186,13 @@ install_pro() {
 
     confirm "$(t config_confirm)" || return 0
 
-    # 6. Install dependencies
+    # 6. Select 3X-UI version (Legacy 2.x or New 3.x)
+    select_xui_version
+
+    # 7. Install dependencies
     install_dependencies || return 1
 
-    # 7. Stop anything on port 443
+    # 8. Stop anything on port 443
     fuser -k 443/tcp 2>/dev/null || true
 
     # 8. Setup website + SSL first (needs port 80 and 443 free)
@@ -242,6 +250,8 @@ install_pro() {
     config_set_int "users_count" 10
     config_set "version" "$XUIFAST_VERSION"
     config_set "installed_at" "$(date -Iseconds)"
+    config_set "xui_branch" "$XUI_BRANCH"
+    [ -n "$XUI_INSTALL_VERSION" ] && config_set "xui_version" "$XUI_INSTALL_VERSION"
 
     # 19. Done!
     echo ""
@@ -398,7 +408,11 @@ show_dashboard() {
     domain=$(config_get domain "")
     mask=$(config_get mask_domain "")
 
+    local xui_ver
+    xui_ver=$(config_get xui_version "")
+
     echo -e "  $(t net_mode)    ${CYAN}${mode}${NC}"
+    [ -n "$xui_ver" ] && echo -e "  $(t dashboard_xui_ver)  ${CYAN}${xui_ver}${NC}"
     [ -n "$ip" ] && echo -e "  $(t net_ip)      ${CYAN}${ip}${NC}"
     [ -n "$domain" ] && echo -e "  $(t net_domain)  ${CYAN}${domain}${NC}"
     [ -n "$mask" ] && echo -e "  $(t config_mask) ${CYAN}${mask}${NC}"

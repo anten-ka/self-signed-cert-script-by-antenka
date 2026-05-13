@@ -47,6 +47,18 @@ I18N[net_mode]="Режим:"
 I18N[net_domain]="Домен:"
 I18N[net_users]="Польз.:"
 I18N[vpn_not_configured]="VPN не настроен. Выберите пункт 1."
+I18N[dashboard_xui_ver]="3X-UI:"
+
+# ── Выбор версии 3X-UI ────────────────────────────────────────────────
+I18N[xui_version_title]="Выберите версию панели 3X-UI"
+I18N[xui_version_detecting]="Определяю последние версии..."
+I18N[xui_version_new_gen]="Новое поколение"
+I18N[xui_version_new_desc]="Vue 3 интерфейс, новый API, современный UI (рекомендуется)"
+I18N[xui_version_legacy]="Legacy (стабильная)"
+I18N[xui_version_legacy_desc]="Классический UI, проверенная стабильность"
+I18N[xui_version_choice]="Ваш выбор [1/2]:"
+I18N[xui_version_selected]="Выбрано: %s"
+I18N[xui_installing_version]="Установка 3X-UI %s..."
 
 # ── Install flow ───────────────────────────────────────────────────────
 I18N[install_select_mode]="🎭 Выберите режим маскировки:"
