@@ -185,13 +185,23 @@ install_3xui() {
     fi
 
     # Run the official installer with expect for automated interaction
+    # Key: answer "n" to customization prompts (port, path, username)
+    # to keep defaults, "y" to other confirmation prompts
     expect << EXPECT_EOF > "$install_log" 2>&1
 set timeout 300
 spawn bash -c "${install_cmd}"
 
-# Accept any confirmation prompts
+# Handle prompts from the 3X-UI installer
 expect {
+    -re "customize|Customize" {
+        # "Would you like to customize the Panel Port/Path/Username?"
+        # Answer "n" to use random/default values
+        sleep 1
+        send "n\r"
+        exp_continue
+    }
     -re "y/n|Y/N|y/N|yes/no" {
+        # General confirmation prompts — accept
         sleep 1
         send "y\r"
         exp_continue
