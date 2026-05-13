@@ -223,19 +223,19 @@ expect {
         send "\r"
         exp_continue
     }
-    -re "\\\[y/n\\\]|\\\[Y/N\\\]|\\\[y/N\\\]|yes/no" {
+    -re {\[y/n\]|\[Y/N\]|\[y/N\]|yes/no} {
         # General y/n prompts in brackets — accept
         sleep 1
         send "y\r"
         exp_continue
     }
-    -re ":\\s*$" {
+    -re {:\s*$} {
         # Generic colon-prompt (catch-all for unexpected prompts)
         sleep 1
         send "\r"
         exp_continue
     }
-    -re "\\\\$|#\\s*$" {
+    -re {\$|#\s*$} {
         # Shell prompt — installation finished
     }
     eof {}
