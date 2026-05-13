@@ -173,10 +173,14 @@ install_pro() {
     read -r email
     email=$(echo "$email" | tr -d '[:space:]')
 
-    # 4. Template selection (from catalog or stub)
+    # 4. Template selection (from 1800+ catalog or stub)
     local template_dir=""
-    if [ -f "$TEMPLATES_CATALOG" ] && command -v jq &>/dev/null; then
-        # Use template catalog if available
+    # Copy catalog to XUIFAST_DIR if it exists in script dir but not in data dir
+    if [ -f "${SCRIPT_DIR}/templates_catalog.json" ] && [ ! -f "$TEMPLATES_CATALOG" ]; then
+        mkdir -p "$XUIFAST_DIR"
+        cp "${SCRIPT_DIR}/templates_catalog.json" "$TEMPLATES_CATALOG" 2>/dev/null
+    fi
+    if command -v jq &>/dev/null; then
         source "${SCRIPT_DIR}/lib/templates_catalog.sh" 2>/dev/null
         if type interactive_template_selection &>/dev/null; then
             template_dir=$(interactive_template_selection) || true

@@ -3,7 +3,15 @@
 # Pick from ~1800 templates, preview links, git sparse-checkout downloads,
 # + custom git URL templates (user-supplied public repos)
 
-CATALOG_FILE="${XUIFAST_DIR:-/opt/xuifast}/templates_catalog.json"
+# Look for catalog in XUIFAST_DIR first, then in the script's own directory
+_script_dir_tc="$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")"
+if [ -f "${XUIFAST_DIR:-/opt/xuifast}/templates_catalog.json" ]; then
+    CATALOG_FILE="${XUIFAST_DIR:-/opt/xuifast}/templates_catalog.json"
+elif [ -f "${_script_dir_tc}/templates_catalog.json" ]; then
+    CATALOG_FILE="${_script_dir_tc}/templates_catalog.json"
+else
+    CATALOG_FILE="${XUIFAST_DIR:-/opt/xuifast}/templates_catalog.json"
+fi
 TEMPLATES_CACHE="/tmp/xuifast_templates"
 
 # Custom git template limits
