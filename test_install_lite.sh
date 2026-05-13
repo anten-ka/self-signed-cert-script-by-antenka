@@ -67,15 +67,17 @@ config_set "xui_version" "$XUI_INSTALL_VERSION"
 config_set "transport" "$XUI_TRANSPORT"
 config_set "reality_domain" "www.google.com"
 
-echo "=== STEP 9: create inbound ==="
+echo "=== STEP 9: generate users ==="
+generate_clients 2
+echo "USERS_EXIT=$?"
+echo "Clients file:"
+cat /tmp/xuifast_clients.json 2>/dev/null | head -5 || echo "NO CLIENTS FILE"
+
+echo "=== STEP 10: create inbound ==="
 REALITY_DEST="www.google.com"
 REALITY_SNI="www.google.com"
 api_create_reality_inbound
 echo "INBOUND_EXIT=$?"
-
-echo "=== STEP 10: generate users ==="
-generate_clients 2
-echo "USERS_EXIT=$?"
 
 echo "=== STEP 11: generate vless links ==="
 generate_all_vless_links

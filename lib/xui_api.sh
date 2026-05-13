@@ -77,7 +77,7 @@ wait_for_api() {
         for proto in https http; do
             local code
             code=$(curl -sk -o /dev/null -w '%{http_code}' \
-                "${proto}://127.0.0.1:${XUI_PORT}${base_path}/login" 2>/dev/null)
+                "${proto}://127.0.0.1:${XUI_PORT}${base_path}/" 2>/dev/null)
             if [ "$code" = "200" ]; then
                 API_BASE="${proto}://127.0.0.1:${XUI_PORT}${base_path}"
                 return 0
