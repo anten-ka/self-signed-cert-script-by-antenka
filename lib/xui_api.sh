@@ -42,27 +42,41 @@ generate_random_name() {
 
 # ── Setup API base URL ──────────────────────────────────────────────────
 setup_api_base() {
-    API_BASE="https://127.0.0.1:${XUI_PORT}${XUI_WEB_PATH}"
-    # Ensure no double slashes
-    API_BASE="${API_BASE%/}"
+    local base_path="${XUI_WEB_PATH%/}"
+    # 3X-UI panel runs HTTP by default (no built-in TLS unless configured)
+    # Try HTTPS first (in case panel has TLS enabled), fall back to HTTP
+    local code
+    code=$(curl -sk -o /dev/null -w '%{http_code}' \
+        "https://127.0.0.1:${XUI_PORT}${base_path}/" 2>/dev/null)
+    if [ "$code" != "000" ] && [ "$code" != "" ]; then
+        API_BASE="https://127.0.0.1:${XUI_PORT}${base_path}"
+    else
+        API_BASE="http://127.0.0.1:${XUI_PORT}${base_path}"
+    fi
 }
 
 # ── Wait for API to become available ────────────────────────────────────
 wait_for_api() {
     local timeout="${1:-60}"
     local elapsed=0
-
-    setup_api_base
+    local base_path="${XUI_WEB_PATH%/}"
 
     while [ "$elapsed" -lt "$timeout" ]; do
-        local code
-        code=$(curl -sk -o /dev/null -w '%{http_code}' "${API_BASE}/login" 2>/dev/null)
-        if [ "$code" = "200" ]; then
-            return 0
-        fi
+        # Try both HTTPS and HTTP — panel protocol depends on config
+        for proto in https http; do
+            local code
+            code=$(curl -sk -o /dev/null -w '%{http_code}' \
+                "${proto}://127.0.0.1:${XUI_PORT}${base_path}/login" 2>/dev/null)
+            if [ "$code" = "200" ]; then
+                API_BASE="${proto}://127.0.0.1:${XUI_PORT}${base_path}"
+                return 0
+            fi
+        done
         sleep 2
         elapsed=$((elapsed + 2))
     done
+    # Final attempt to set API_BASE even on timeout
+    setup_api_base
     log_error "$(t api_waiting) — timeout ${timeout}s"
     return 1
 }
