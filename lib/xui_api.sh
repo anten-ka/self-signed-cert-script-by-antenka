@@ -348,7 +348,7 @@ stream_settings = json.dumps({
             "usage": "encipherment",
             "buildChain": False
         }],
-        "alpn": ["h2", "http/1.1"],
+        "alpn": ["http/1.1"],
         "settings": {
             "allowInsecure": False,
             "fingerprint": "chrome"
@@ -504,7 +504,7 @@ generate_vless_link_tls() {
     local encoded_name
     encoded_name=$(python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))" "$name" 2>/dev/null || echo "$name")
 
-    echo "vless://${uuid}@${domain}:443?type=tcp&security=tls&sni=${domain}&alpn=h2%2Chttp%2F1.1&fp=chrome&flow=xtls-rprx-vision#${encoded_name}"
+    echo "vless://${uuid}@${domain}:443?type=tcp&security=tls&sni=${domain}&alpn=http%2F1.1&fp=chrome&flow=xtls-rprx-vision#${encoded_name}"
 }
 
 # ── Generate all VLESS links and save ───────────────────────────────────
@@ -574,7 +574,7 @@ for name, uuid in users.items():
         link = (
             f"vless://{uuid}@{server}:443"
             f"?type=tcp&security=tls"
-            f"&sni={server}&alpn=h2%2Chttp%2F1.1"
+            f"&sni={server}&alpn=http%2F1.1"
             f"&fp=chrome&flow=xtls-rprx-vision"
             f"#{enc_name}"
         )
