@@ -8,6 +8,9 @@ XUI_BRANCH=""          # "new" (3.x) or "legacy" (2.x)
 XUI_INSTALL_VERSION="" # e.g. "v3.0.1" or "v2.9.4" or "" (latest)
 XUI_LEGACY_FALLBACK="v2.9.4"  # hardcoded fallback if GitHub API unreachable
 
+# ── Transport globals ──────────────────────────────────────────────────
+XUI_TRANSPORT="tcp"    # "tcp", "xhttp", or "grpc"
+
 # ── Get latest 2.x version from GitHub API ─────────────────────────────
 get_latest_2x_version() {
     local version=""
@@ -107,6 +110,41 @@ select_xui_version() {
             XUI_BRANCH="new"
             XUI_INSTALL_VERSION="${new_ver}"
             log_dim "$(tf xui_version_selected "$new_label (default)")" >&2
+            ;;
+    esac
+}
+
+# ── Interactive transport picker (Lite mode only) ──────────────────────
+select_transport() {
+    echo "" >&2
+    echo -e "  ${BOLD}${WHITE}$(t transport_title)${NC}" >&2
+    echo -e "  ${DIM}$(printf '─%.0s' {1..55})${NC}" >&2
+    echo "" >&2
+    echo -e "  ${CYAN}1)${NC} ${BOLD}TCP${NC} — $(t transport_tcp_desc)" >&2
+    echo -e "  ${CYAN}2)${NC} ${BOLD}XHTTP${NC} — $(t transport_xhttp_desc)" >&2
+    echo -e "  ${CYAN}3)${NC} ${BOLD}gRPC${NC} — $(t transport_grpc_desc)" >&2
+    echo "" >&2
+
+    local choice
+    echo -ne "  $(t transport_choice) " >&2
+    read -r choice
+
+    case "$choice" in
+        1)
+            XUI_TRANSPORT="tcp"
+            log_success "$(tf transport_selected "TCP")" >&2
+            ;;
+        2)
+            XUI_TRANSPORT="xhttp"
+            log_success "$(tf transport_selected "XHTTP")" >&2
+            ;;
+        3)
+            XUI_TRANSPORT="grpc"
+            log_success "$(tf transport_selected "gRPC")" >&2
+            ;;
+        *)
+            XUI_TRANSPORT="tcp"
+            log_dim "$(tf transport_selected "TCP (default)")" >&2
             ;;
     esac
 }

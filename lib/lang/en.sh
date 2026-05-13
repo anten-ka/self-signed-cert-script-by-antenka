@@ -60,6 +60,15 @@ I18N[xui_version_choice]="Your choice [1/2]:"
 I18N[xui_version_selected]="Selected: %s"
 I18N[xui_installing_version]="Installing 3X-UI %s..."
 
+# ── Transport selection ────────────────────────────────────────────────
+I18N[transport_title]="Select transport protocol"
+I18N[transport_tcp_desc]="Classic, direct connection, lowest ping (recommended)"
+I18N[transport_xhttp_desc]="Modern, CDN-friendly, good stealth"
+I18N[transport_grpc_desc]="Multiplexed, CDN-friendly, HTTP/2 based"
+I18N[transport_choice]="Your choice [1/2/3]:"
+I18N[transport_selected]="Transport: %s"
+I18N[config_transport]="Transport:"
+
 # ── Install flow ───────────────────────────────────────────────────────
 I18N[install_select_mode]="🎭 Select stealth mode:"
 I18N[install_lite_title]="⚡ Lite — masquerade as another site (Reality)"

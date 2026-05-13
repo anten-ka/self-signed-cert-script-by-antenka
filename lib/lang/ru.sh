@@ -60,6 +60,15 @@ I18N[xui_version_choice]="Ваш выбор [1/2]:"
 I18N[xui_version_selected]="Выбрано: %s"
 I18N[xui_installing_version]="Установка 3X-UI %s..."
 
+# ── Выбор транспорта ───────────────────────────────────────────────────
+I18N[transport_title]="Выберите транспортный протокол"
+I18N[transport_tcp_desc]="Классика, прямое подключение, минимальный пинг (рекомендуется)"
+I18N[transport_xhttp_desc]="Современный, совместим с CDN, хорошая маскировка"
+I18N[transport_grpc_desc]="Мультиплексирование, совместим с CDN, на базе HTTP/2"
+I18N[transport_choice]="Ваш выбор [1/2/3]:"
+I18N[transport_selected]="Транспорт: %s"
+I18N[config_transport]="Транспорт:"
+
 # ── Install flow ───────────────────────────────────────────────────────
 I18N[install_select_mode]="🎭 Выберите режим маскировки:"
 I18N[install_lite_title]="⚡ Lite — маскировка под чужой сайт (Reality)"

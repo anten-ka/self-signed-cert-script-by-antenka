@@ -68,7 +68,14 @@ install_lite() {
     # 3. Select 3X-UI version (Legacy 2.x or New 3.x)
     select_xui_version
 
-    # 4. Install dependencies
+    # 3b. Select transport protocol (TCP / XHTTP / gRPC)
+    select_transport
+
+    # 4. Show transport in summary
+    echo -e "  $(t config_transport) ${CYAN}${XUI_TRANSPORT^^}${NC}"
+    echo ""
+
+    # 5. Install dependencies
     install_dependencies || return 1
 
     # 5. Install 3X-UI (version selected in step 3)
@@ -108,6 +115,7 @@ install_lite() {
     config_set "mode" "lite"
     config_set "mask_domain" "$mask_domain"
     config_set "server_ip" "$server_ip"
+    config_set "transport" "$XUI_TRANSPORT"
     config_set "xui_branch" "$XUI_BRANCH"
     [ -n "$XUI_INSTALL_VERSION" ] && config_set "xui_version" "$XUI_INSTALL_VERSION"
     config_set_int "port" 443
@@ -408,11 +416,13 @@ show_dashboard() {
     domain=$(config_get domain "")
     mask=$(config_get mask_domain "")
 
-    local xui_ver
+    local xui_ver transport_cfg
     xui_ver=$(config_get xui_version "")
+    transport_cfg=$(config_get transport "")
 
     echo -e "  $(t net_mode)    ${CYAN}${mode}${NC}"
     [ -n "$xui_ver" ] && echo -e "  $(t dashboard_xui_ver)  ${CYAN}${xui_ver}${NC}"
+    [ -n "$transport_cfg" ] && echo -e "  $(t config_transport) ${CYAN}${transport_cfg^^}${NC}"
     [ -n "$ip" ] && echo -e "  $(t net_ip)      ${CYAN}${ip}${NC}"
     [ -n "$domain" ] && echo -e "  $(t net_domain)  ${CYAN}${domain}${NC}"
     [ -n "$mask" ] && echo -e "  $(t config_mask) ${CYAN}${mask}${NC}"

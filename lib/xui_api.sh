@@ -125,9 +125,11 @@ api_set_language() {
 }
 
 # ── Create VLESS Reality inbound (Lite mode) ────────────────────────────
+# Supports transports: tcp, xhttp, grpc (via XUI_TRANSPORT global)
 api_create_reality_inbound() {
     local mask_domain="$1"
     local cookie_file="${2:-/tmp/xuifast_cookie.txt}"
+    local transport="${XUI_TRANSPORT:-tcp}"
 
     log_info "$(t api_creating_inbound)"
 
@@ -137,12 +139,13 @@ api_create_reality_inbound() {
     [ -n "$REALITY_PUBLIC_KEY" ] || { log_error "Reality public key not set"; return 1; }
 
     # Build the payload using Python (injection-safe)
-    if ! python3 - "$mask_domain" "$REALITY_PRIVATE_KEY" "$REALITY_PUBLIC_KEY" << 'PYEOF'
+    if ! python3 - "$mask_domain" "$REALITY_PRIVATE_KEY" "$REALITY_PUBLIC_KEY" "$transport" << 'PYEOF'
 import json, sys
 
 mask_domain = sys.argv[1]
 private_key = sys.argv[2]
 public_key = sys.argv[3]
+transport = sys.argv[4]
 
 with open('/tmp/xuifast_clients.json') as f:
     clients = json.load(f)
@@ -157,8 +160,9 @@ settings = json.dumps({
     "fallbacks": []
 })
 
-stream_settings = json.dumps({
-    "network": "tcp",
+# Build transport-specific stream settings
+stream = {
+    "network": transport,
     "security": "reality",
     "externalProxy": [],
     "realitySettings": {
@@ -177,12 +181,27 @@ stream_settings = json.dumps({
             "serverName": "",
             "spiderX": "/"
         }
-    },
-    "tcpSettings": {
+    }
+}
+
+if transport == "tcp":
+    stream["tcpSettings"] = {
         "acceptProxyProtocol": False,
         "header": {"type": "none"}
     }
-})
+elif transport == "xhttp":
+    stream["xhttpSettings"] = {
+        "path": "/",
+        "host": "",
+        "mode": "auto"
+    }
+elif transport == "grpc":
+    stream["grpcSettings"] = {
+        "serviceName": "xuifast",
+        "multiMode": True
+    }
+
+stream_settings = json.dumps(stream)
 
 sniffing = json.dumps({
     "enabled": True,
@@ -195,7 +214,7 @@ payload = {
     "up": 0,
     "down": 0,
     "total": 0,
-    "remark": "xuifast-vless-reality",
+    "remark": f"xuifast-vless-reality-{transport}",
     "enable": True,
     "expiryTime": 0,
     "listen": "",
@@ -369,7 +388,12 @@ generate_clients() {
     unset seen_names
 
     # Build JSON array with Python
+    # flow=xtls-rprx-vision only works with TCP; must be empty for gRPC/XHTTP
+    local transport="${XUI_TRANSPORT:-tcp}"
     local flow="xtls-rprx-vision"
+    if [ "$transport" != "tcp" ]; then
+        flow=""
+    fi
 
     if ! python3 - "$mode" "$flow" "${names[@]}" << 'PYEOF'
 import json, sys, uuid
@@ -465,7 +489,8 @@ print(sids[0] if sids else '')
     fi
 
     # Generate links
-    if ! python3 - "$mode" "$server" "$mask_domain" "${REALITY_PUBLIC_KEY:-}" "$short_id" << 'PYEOF'
+    local transport="${XUI_TRANSPORT:-tcp}"
+    if ! python3 - "$mode" "$server" "$mask_domain" "${REALITY_PUBLIC_KEY:-}" "$short_id" "$transport" << 'PYEOF'
 import json, sys
 from urllib.parse import quote
 
@@ -474,6 +499,7 @@ server = sys.argv[2]
 mask_domain = sys.argv[3]
 public_key = sys.argv[4]
 short_id = sys.argv[5]
+transport = sys.argv[6]
 
 with open('/tmp/xuifast_users_map.json') as f:
     users = json.load(f)
@@ -482,15 +508,23 @@ links = {}
 for name, uuid in users.items():
     enc_name = quote(name)
     if mode == "lite":
-        link = (
-            f"vless://{uuid}@{server}:443"
-            f"?type=tcp&security=reality"
-            f"&pbk={public_key}&fp=chrome"
-            f"&sni={mask_domain}&sid={short_id}"
-            f"&spx=%2F&flow=xtls-rprx-vision"
-            f"#{enc_name}"
-        )
+        # Base params
+        params = f"type={transport}&security=reality"
+        params += f"&pbk={public_key}&fp=chrome"
+        params += f"&sni={mask_domain}&sid={short_id}"
+        params += f"&spx=%2F"
+
+        # Transport-specific params
+        if transport == "tcp":
+            params += "&flow=xtls-rprx-vision"
+        elif transport == "grpc":
+            params += "&serviceName=xuifast&mode=multi"
+        elif transport == "xhttp":
+            params += "&path=%2F&mode=auto"
+
+        link = f"vless://{uuid}@{server}:443?{params}#{enc_name}"
     else:
+        # Pro mode: always TCP
         link = (
             f"vless://{uuid}@{server}:443"
             f"?type=tcp&security=tls"
