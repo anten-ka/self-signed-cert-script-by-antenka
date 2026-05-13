@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Debug 3X-UI API login — test different approaches."""
+"""Debug 3X-UI API login — test CSRF token approach."""
 import requests
-import sys
+import re
 import os
 
-# Read credentials from env or defaults
 port = os.environ.get("XUI_PORT", "38465")
 webpath = os.environ.get("XUI_WEB_PATH", "/YcKFYzaPrAlNs0ZDzr")
 user = os.environ.get("XUI_USER", "IZeqm6fJnT")
@@ -14,52 +13,33 @@ base = f"http://127.0.0.1:{port}{webpath}"
 print(f"Base URL: {base}")
 print(f"Creds: {user} / {passwd}")
 
-# Test 1: Direct POST (like our current code)
-print("\n=== Test 1: Direct POST ===")
-r = requests.post(f"{base}/login", data={"username": user, "password": passwd})
-print(f"Status: {r.status_code}")
-print(f"Headers: {dict(r.headers)}")
-print(f"Body: {r.text[:200]}")
-
-# Test 2: Session-based (GET first, then POST)
-print("\n=== Test 2: Session GET+POST ===")
+# Step 1: GET page, extract CSRF token
 s = requests.Session()
 r1 = s.get(f"{base}/")
-print(f"GET /: {r1.status_code}")
-print(f"Session cookies: {dict(s.cookies)}")
-r2 = s.post(f"{base}/login", data={"username": user, "password": passwd})
-print(f"POST /login: {r2.status_code}")
-print(f"Body: {r2.text[:200]}")
+print(f"\nGET /: {r1.status_code}")
+m = re.search(r'csrf-token" content="([^"]+)"', r1.text)
+csrf = m.group(1) if m else ""
+print(f"CSRF token: {csrf[:30]}..." if csrf else "No CSRF token found!")
 
-# Test 3: With X-Requested-With header
-print("\n=== Test 3: XHR header ===")
-s2 = requests.Session()
-s2.get(f"{base}/")
-r3 = s2.post(f"{base}/login", data={"username": user, "password": passwd},
-             headers={"X-Requested-With": "XMLHttpRequest"})
-print(f"Status: {r3.status_code}")
-print(f"Body: {r3.text[:200]}")
+# Step 2: POST login with CSRF header
+headers = {}
+if csrf:
+    headers["X-CSRF-Token"] = csrf
+r2 = s.post(f"{base}/login", data={"username": user, "password": passwd}, headers=headers)
+print(f"\nPOST /login: {r2.status_code}")
+print(f"Body: {r2.text[:300]}")
 
-# Test 4: JSON body instead of form
-print("\n=== Test 4: JSON body ===")
-s3 = requests.Session()
-s3.get(f"{base}/")
-r4 = s3.post(f"{base}/login", json={"username": user, "password": passwd})
-print(f"Status: {r4.status_code}")
-print(f"Body: {r4.text[:200]}")
-
-# Test 5: Check if there's a CSRF token in session cookie
-print("\n=== Test 5: Cookie + Referer ===")
-s4 = requests.Session()
-s4.get(f"{base}/")
-r5 = s4.post(f"{base}/login", data={"username": user, "password": passwd},
-             headers={"Referer": f"{base}/", "Origin": f"http://127.0.0.1:{port}"})
-print(f"Status: {r5.status_code}")
-print(f"Body: {r5.text[:200]}")
-
-# Test 6: Check HTML for CSRF meta tag
-print("\n=== Test 6: HTML analysis ===")
-html = requests.get(f"{base}/").text
-for line in html.split("\n"):
-    if "csrf" in line.lower() or "token" in line.lower() or "meta" in line.lower():
-        print(f"  Found: {line.strip()[:120]}")
+if r2.status_code == 200:
+    data = r2.json()
+    print(f"Success: {data.get('success')}")
+    if data.get("success"):
+        print("\nLogin WORKS! Testing API...")
+        # Refresh CSRF after login
+        r3 = s.get(f"{base}/")
+        m2 = re.search(r'csrf-token" content="([^"]+)"', r3.text)
+        csrf2 = m2.group(1) if m2 else csrf
+        headers2 = {"X-CSRF-Token": csrf2} if csrf2 else {}
+        # Try getting inbounds list
+        r4 = s.post(f"{base}/panel/api/inbounds/list", headers=headers2)
+        print(f"GET inbounds: {r4.status_code}")
+        print(f"Body: {r4.text[:200]}")

@@ -40,6 +40,17 @@ generate_random_name() {
     echo "${adj}-${animal}"
 }
 
+# ── CSRF token (3X-UI v3.x) ────────────────────────────────────────────
+API_CSRF_TOKEN=""
+
+# Build curl args array with CSRF header if token is set
+# Usage: local csrf_args=(); _csrf_args csrf_args; curl ... "${csrf_args[@]}"
+_csrf_args() {
+    local -n _arr=$1
+    _arr=()
+    [ -n "$API_CSRF_TOKEN" ] && _arr=(-H "X-CSRF-Token: ${API_CSRF_TOKEN}")
+}
+
 # ── Setup API base URL ──────────────────────────────────────────────────
 setup_api_base() {
     local base_path="${XUI_WEB_PATH%/}"
@@ -85,9 +96,18 @@ wait_for_api() {
 api_login() {
     local cookie_file="${1:-/tmp/xuifast_cookie.txt}"
 
+    # 3X-UI v3.x requires CSRF token from the HTML page for POST requests
+    # Step 1: GET the panel page to obtain session cookie and CSRF token
+    local html
+    html=$(curl -sk -c "$cookie_file" "${API_BASE}/" 2>/dev/null)
+    API_CSRF_TOKEN=$(echo "$html" | grep -oP '(?<=csrf-token" content=")[^"]+' 2>/dev/null)
+
+    # Step 2: POST login with session cookie and CSRF token
     local http_code
+    local csrf_args=(); _csrf_args csrf_args
     http_code=$(curl -sk -w '%{http_code}' -o /tmp/xuifast_login_resp.json \
-        -c "$cookie_file" \
+        -b "$cookie_file" -c "$cookie_file" \
+        "${csrf_args[@]}" \
         "${API_BASE}/login" \
         --data-urlencode "username=${XUI_USER}" \
         --data-urlencode "password=${XUI_PASS}" 2>/dev/null)
@@ -97,6 +117,12 @@ api_login() {
         local success
         success=$(python3 -c "import json; d=json.load(open('/tmp/xuifast_login_resp.json')); print(d.get('success', False))" 2>/dev/null || echo "False")
         if [ "$success" = "True" ]; then
+            # Refresh CSRF token from the login response cookies (may have rotated)
+            local post_html
+            post_html=$(curl -sk -b "$cookie_file" "${API_BASE}/" 2>/dev/null)
+            local new_token
+            new_token=$(echo "$post_html" | grep -oP '(?<=csrf-token" content=")[^"]+' 2>/dev/null)
+            [ -n "$new_token" ] && API_CSRF_TOKEN="$new_token"
             log_success "$(t api_login_ok)"
             return 0
         else
@@ -132,9 +158,11 @@ api_set_language() {
     local panel_lang="en-US"
     [ "$lang" = "ru" ] && panel_lang="ru-RU"
 
+    local csrf_args=(); _csrf_args csrf_args
     curl -sk -b "$cookie_file" \
         -X POST "${API_BASE}/panel/setting/update" \
         -H "Content-Type: application/x-www-form-urlencoded" \
+        "${csrf_args[@]}" \
         --data-urlencode "webLang=${panel_lang}" >/dev/null 2>&1
 }
 
@@ -250,8 +278,10 @@ PYEOF
 
     # Send the request
     local http_code
+    local csrf_args=(); _csrf_args csrf_args
     http_code=$(curl -sk -w '%{http_code}' -o /tmp/xuifast_api_resp.json \
         -b "$cookie_file" \
+        "${csrf_args[@]}" \
         -X POST "${API_BASE}/panel/api/inbounds/add" \
         -H "Content-Type: application/json" \
         -d @/tmp/xuifast_payload.json 2>/dev/null)
@@ -362,8 +392,10 @@ PYEOF
     fi
 
     local http_code
+    local csrf_args=(); _csrf_args csrf_args
     http_code=$(curl -sk -w '%{http_code}' -o /tmp/xuifast_api_resp.json \
         -b "$cookie_file" \
+        "${csrf_args[@]}" \
         -X POST "${API_BASE}/panel/api/inbounds/add" \
         -H "Content-Type: application/json" \
         -d @/tmp/xuifast_payload.json 2>/dev/null)
