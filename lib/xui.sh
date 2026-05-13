@@ -192,41 +192,50 @@ install_3xui() {
 set timeout 300
 spawn bash -c "${install_cmd}"
 
-# Handle prompts from the 3X-UI installer
-# Order matters: more specific patterns MUST come before generic ones
+# Handle prompts from the 3X-UI installer (v2.x and v3.x)
+# The v3.x installer has these interactive prompts in order:
+#   1. "customize Panel Port? [y/n]" → send "n"
+#   2. SSL Certificate Setup → "Choose an option" → send "4" (skip)
+#   3. If SSL chosen: "IPv6 address?" → send Enter
+#   4. If SSL chosen: "Port to use for ACME" → send Enter (default 80)
+# Use specific patterns; order matters (most specific first)
 expect {
-    -re "customize|Customize" {
-        # "Would you like to customize the Panel Port/Path/Username?"
-        # Answer "n" to use random/default values
+    -re "ustomize" {
+        # "Would you like to customize...?" → decline
         sleep 1
         send "n\r"
         exp_continue
     }
-    -re "Choose an option|choose an option|default.*for" {
-        # SSL Certificate Setup menu (v3.x): options 1-4
-        # Send "4" to skip SSL — XUIFAST manages SSL itself
+    -re "hoose an option|hoose SSL|elect.*option" {
+        # SSL Certificate Setup menu → option 4 = Skip SSL
         sleep 1
         send "4\r"
         exp_continue
     }
     -re "IPv6|ipv6|leave empty" {
-        # "Do you have an IPv6 address to include?"
         sleep 1
         send "\r"
         exp_continue
     }
-    -re "y/n|Y/N|y/N|yes/no" {
-        # General confirmation prompts — accept
+    -re "ACME|listener.*default|port to use" {
+        # ACME port prompt → use default (Enter)
+        sleep 1
+        send "\r"
+        exp_continue
+    }
+    -re "\\\[y/n\\\]|\\\[Y/N\\\]|\\\[y/N\\\]|yes/no" {
+        # General y/n prompts in brackets — accept
         sleep 1
         send "y\r"
         exp_continue
     }
-    -re "Enter|enter|press" {
+    -re ":\\s*$" {
+        # Generic colon-prompt (catch-all for unexpected prompts)
         sleep 1
         send "\r"
         exp_continue
     }
-    -re "\\\\$" {
+    -re "\\\\$|#\\s*$" {
         # Shell prompt — installation finished
     }
     eof {}
@@ -251,7 +260,52 @@ EXPECT_EOF
         return 1
     fi
 
-    log_success "$(t xui_installed)"
+    # 3X-UI v3.x bug: sometimes fails to install systemd service
+    # ("Service files not found in tar.gz, downloading from GitHub... Failed")
+    # Fix: install the service file ourselves from the included template
+    if ! systemctl cat "$XUI_SERVICE" &>/dev/null; then
+        log_dim "Installing systemd service (workaround for v3.x)..."
+        local service_file=""
+        # Try the debian service file included in the archive
+        for sf in "$XUI_DIR/x-ui.service.debian" "$XUI_DIR/x-ui.service.rhel" "$XUI_DIR/x-ui.service"; do
+            [ -f "$sf" ] && { service_file="$sf"; break; }
+        done
+
+        if [ -n "$service_file" ]; then
+            cp "$service_file" /etc/systemd/system/x-ui.service
+        else
+            # Create a minimal service file
+            cat > /etc/systemd/system/x-ui.service << 'SVCEOF'
+[Unit]
+Description=x-ui
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/x-ui/x-ui
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+        fi
+        systemctl daemon-reload 2>/dev/null
+    fi
+
+    # Enable and start the service
+    systemctl enable "$XUI_SERVICE" 2>/dev/null
+    systemctl start "$XUI_SERVICE" 2>/dev/null
+    sleep 2
+
+    if systemctl is-active --quiet "$XUI_SERVICE" 2>/dev/null; then
+        log_success "$(t xui_installed)"
+    else
+        log_error "$(t xui_install_failed) — service failed to start"
+        journalctl -u "$XUI_SERVICE" --no-pager -n 5 2>/dev/null >&2
+        return 1
+    fi
+
     return 0
 }
 
@@ -261,11 +315,18 @@ extract_credentials() {
     local username="" password="" port="" web_path=""
 
     # Method 1: parse install log
+    # v3.x format: "Username:    tiwcBwDS1y" (with ANSI color codes)
+    # v2.x format: "username: admin"
+    # Strip ANSI codes first, then parse case-insensitively
     if [ -f "$install_log" ]; then
-        username=$(grep -oP '(?<=username:\s).*' "$install_log" 2>/dev/null | tail -1 | tr -d '[:space:]')
-        password=$(grep -oP '(?<=password:\s).*' "$install_log" 2>/dev/null | tail -1 | tr -d '[:space:]')
-        port=$(grep -oP '(?<=port:\s)\d+' "$install_log" 2>/dev/null | tail -1 | tr -d '[:space:]')
-        web_path=$(grep -oP '(?<=webBasePath:\s)/[^\s]+' "$install_log" 2>/dev/null | tail -1 | tr -d '[:space:]')
+        local clean_log
+        clean_log=$(sed 's/\x1b\[[0-9;]*m//g' "$install_log" 2>/dev/null)
+        username=$(echo "$clean_log" | grep -ioP '(?<=username:\s{0,10})\S+' 2>/dev/null | tail -1 | tr -d '[:space:]')
+        password=$(echo "$clean_log" | grep -ioP '(?<=password:\s{0,10})\S+' 2>/dev/null | tail -1 | tr -d '[:space:]')
+        port=$(echo "$clean_log" | grep -ioP '(?<=port:\s{0,10})\d+' 2>/dev/null | tail -1 | tr -d '[:space:]')
+        # v3.x: "WebBasePath: lCb8E25Wh22wIp3HIJ" (no leading slash)
+        # v2.x: "webBasePath: /abc"
+        web_path=$(echo "$clean_log" | grep -ioP '(?<=webbasepath:\s{0,10})\S+' 2>/dev/null | tail -1 | tr -d '[:space:]')
     fi
 
     # Method 2: fallback to sqlite
@@ -331,6 +392,8 @@ load_credentials() {
         XUI_PASS="${PASSWORD:-admin}"
         XUI_PORT="${PORT:-2053}"
         XUI_WEB_PATH="${WEB_PATH:-/}"
+        # Normalize: ensure leading /
+        [[ "$XUI_WEB_PATH" != /* ]] && XUI_WEB_PATH="/${XUI_WEB_PATH}"
         return 0
     fi
     # Try from sqlite
