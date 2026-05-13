@@ -62,9 +62,9 @@ I18N[xui_installing_version]="Установка 3X-UI %s..."
 
 # ── Выбор транспорта ───────────────────────────────────────────────────
 I18N[transport_title]="Выберите транспортный протокол"
-I18N[transport_tcp_desc]="Классика, прямое подключение, минимальный пинг (рекомендуется)"
-I18N[transport_xhttp_desc]="Современный, совместим с CDN, хорошая маскировка"
-I18N[transport_grpc_desc]="Мультиплексирование, совместим с CDN, на базе HTTP/2"
+I18N[transport_tcp_desc]="Рекомендуется для большинства"
+I18N[transport_xhttp_desc]="Попробуйте, если TCP не работает"
+I18N[transport_grpc_desc]="Попробуйте, если TCP не работает"
 I18N[transport_choice]="Ваш выбор [1/2/3]:"
 I18N[transport_selected]="Транспорт: %s"
 I18N[config_transport]="Транспорт:"
