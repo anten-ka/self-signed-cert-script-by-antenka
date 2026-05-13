@@ -10,7 +10,7 @@ export XUI_BIN="/usr/local/x-ui/x-ui"
 export XUI_DB="/etc/x-ui/x-ui.db"
 export XUI_SERVICE="x-ui"
 export XRAY_BIN="/usr/local/x-ui/bin/xray-linux-amd64"
-export CREDENTIALS_FILE="/etc/xuifast/credentials"
+export CREDENTIALS_FILE="/root/.xuifast_credentials"
 export NGINX_SITE_CONF="/etc/nginx/sites-available/xuifast"
 export NGINX_SITE_LINK="/etc/nginx/sites-enabled/xuifast"
 export WEBSITE_ROOT="/var/www/xuifast"
@@ -51,6 +51,10 @@ test_reality_domain "www.google.com" && echo "google.com OK" || echo "google.com
 echo "=== STEP 6: setup_api_base ==="
 setup_api_base
 echo "API_BASE=$API_BASE"
+
+echo "=== STEP 6.5: wait_for_api ==="
+wait_for_api 30
+echo "WAIT_EXIT=$?"
 
 echo "=== STEP 7: api_login ==="
 api_login
