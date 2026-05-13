@@ -149,9 +149,21 @@ select_transport() {
     esac
 }
 
-# ── Install 3X-UI via expect ────────────────────────────────────────────
+# ── Install 3X-UI (manual method — no expect) ─────────────────────────
 # Usage: install_3xui [version]
 # version: "v3.0.1", "v2.9.4", or "" for latest
+#
+# Manual install steps:
+#   1. Detect arch → download tarball from GitHub releases
+#   2. Extract to /usr/local/x-ui/
+#   3. Generate random credentials (user/pass/port/webpath)
+#   4. Initialize database via x-ui CLI
+#   5. Install systemd service
+#   6. Start service
+#
+# This replaces the previous expect-based approach which was unreliable
+# with 3X-UI v3.x interactive prompts (timing/buffering caused wrong
+# answers ~50% of the time).
 install_3xui() {
     local version="${1:-$XUI_INSTALL_VERSION}"
     log_step "$(t xui_installing)"
@@ -166,98 +178,127 @@ install_3xui() {
     # Clean up orphaned binary if service is missing
     if [ -f "$XUI_BIN" ] && ! systemctl is-enabled "$XUI_SERVICE" &>/dev/null; then
         log_dim "Cleaning up incomplete previous installation..."
-        rm -rf "$XUI_DIR" /usr/bin/x-ui /etc/x-ui 2>/dev/null
+        systemctl stop "$XUI_SERVICE" 2>/dev/null
+        rm -rf "$XUI_DIR" /usr/bin/x-ui 2>/dev/null
         rm -f /etc/systemd/system/x-ui.service 2>/dev/null
         systemctl daemon-reload 2>/dev/null
     fi
 
     local install_log="/tmp/xuifast_xui_install.log"
-    local install_cmd
+    > "$install_log"
 
-    if [ -n "$version" ]; then
-        # Pin to specific version — substitute version directly to avoid
-        # Tcl/expect interpreting ${VERSION} as a Tcl variable
-        log_info "$(tf xui_installing_version "$version")"
-        install_cmd="bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/${version}/install.sh) ${version}"
-    else
-        # Latest (master branch)
-        install_cmd="bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)"
+    # ── 1. Detect architecture ────────────────────────────────────────
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64|amd64)  arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        armv7l)        arch="armv7" ;;
+        s390x)         arch="s390x" ;;
+        *)
+            log_error "Unsupported architecture: $arch"
+            return 1
+            ;;
+    esac
+
+    # ── 2. Resolve version ────────────────────────────────────────────
+    if [ -z "$version" ]; then
+        version=$(curl -Ls "https://api.github.com/repos/MHSanaei/3x-ui/releases/latest" \
+            | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+        if [ -z "$version" ]; then
+            log_error "Failed to detect latest 3X-UI version"
+            return 1
+        fi
     fi
+    log_info "$(tf xui_installing_version "$version")"
 
-    # Run the official installer with expect for automated interaction
-    # 3X-UI v3.x prompts: customize port/path/user, SSL setup, IPv6
-    # Strategy: decline customization, skip SSL (we handle it ourselves),
-    # skip IPv6, accept general confirmations
-    expect << EXPECT_EOF > "$install_log" 2>&1
-set timeout 300
-spawn bash -c "${install_cmd}"
+    # ── 3. Download and extract ───────────────────────────────────────
+    local tarball_url="https://github.com/MHSanaei/3x-ui/releases/download/${version}/x-ui-linux-${arch}.tar.gz"
+    local tarball="/tmp/x-ui-linux-${arch}.tar.gz"
 
-# Handle prompts from the 3X-UI installer (v2.x and v3.x)
-# The v3.x installer has these interactive prompts in order:
-#   1. "customize Panel Port? [y/n]" → send "n"
-#   2. SSL Certificate Setup → "Choose an option" → send "4" (skip)
-#   3. If SSL chosen: "IPv6 address?" → send Enter
-#   4. If SSL chosen: "Port to use for ACME" → send Enter (default 80)
-# Use specific patterns; order matters (most specific first)
-expect {
-    -re "ustomize" {
-        # "Would you like to customize...?" → decline
-        sleep 1
-        send "n\r"
-        exp_continue
-    }
-    -re "hoose an option|hoose SSL|elect.*option" {
-        # SSL Certificate Setup menu → option 4 = Skip SSL
-        sleep 1
-        send "4\r"
-        exp_continue
-    }
-    -re "IPv6|ipv6|leave empty" {
-        sleep 1
-        send "\r"
-        exp_continue
-    }
-    -re "ACME|listener.*default|port to use" {
-        # ACME port prompt → use default (Enter)
-        sleep 1
-        send "\r"
-        exp_continue
-    }
-    -re {\[y/n\]|\[Y/N\]|\[y/N\]|yes/no} {
-        # General y/n prompts in brackets — accept
-        sleep 1
-        send "y\r"
-        exp_continue
-    }
-    eof {}
-    timeout {
-        puts "TIMEOUT during 3x-ui installation"
-        exit 1
-    }
-}
-EXPECT_EOF
-
-    local exit_code=$?
-
-    if [ $exit_code -ne 0 ]; then
-        log_error "$(t xui_install_failed)"
-        [ -f "$install_log" ] && tail -20 "$install_log" >&2
+    log_dim "Downloading 3X-UI ${version} (${arch})..."
+    if ! curl -Ls -o "$tarball" "$tarball_url" 2>>"$install_log"; then
+        log_error "$(t xui_install_failed) — download failed"
         return 1
     fi
 
-    # Verify installation
+    # Verify tarball is valid
+    if ! file "$tarball" 2>/dev/null | grep -qi "gzip"; then
+        log_error "$(t xui_install_failed) — downloaded file is not a valid archive"
+        rm -f "$tarball"
+        return 1
+    fi
+
+    # Remove old install dir, extract fresh
+    rm -rf "$XUI_DIR" 2>/dev/null
+    mkdir -p "$XUI_DIR"
+
+    # The tarball extracts to x-ui/ directory
+    if ! tar -xzf "$tarball" -C /usr/local/ 2>>"$install_log"; then
+        log_error "$(t xui_install_failed) — extraction failed"
+        rm -f "$tarball"
+        return 1
+    fi
+    rm -f "$tarball"
+
+    # Verify binary exists
     if [ ! -f "$XUI_BIN" ]; then
-        log_error "$(t xui_install_failed) — binary not found"
-        return 1
+        # Try to find it
+        local found_bin
+        found_bin=$(find /usr/local/x-ui/ -name "x-ui" -type f -perm -u+x 2>/dev/null | head -1)
+        if [ -z "$found_bin" ]; then
+            log_error "$(t xui_install_failed) — binary not found after extraction"
+            ls -la "$XUI_DIR/" >>"$install_log" 2>&1
+            return 1
+        fi
     fi
 
-    # 3X-UI v3.x bug: sometimes fails to install systemd service
-    # ("Service files not found in tar.gz, downloading from GitHub... Failed")
-    # Fix: install the service file ourselves from the included template
+    # Make binaries executable
+    chmod +x "$XUI_BIN" 2>/dev/null
+    [ -f "$XRAY_BIN" ] && chmod +x "$XRAY_BIN"
+    # Also handle arm64 xray binary
+    local xray_alt="${XUI_DIR}/bin/xray-linux-${arch}"
+    [ -f "$xray_alt" ] && chmod +x "$xray_alt"
+
+    # Create database directory
+    mkdir -p "$(dirname "$XUI_DB")"
+
+    # ── 4. Generate random credentials ────────────────────────────────
+    local rand_user rand_pass rand_port rand_webpath
+    rand_user=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
+    rand_pass=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
+    rand_port=$(shuf -i 10000-65000 -n 1)
+    rand_webpath="/$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 18)"
+
+    # ── 5. Configure via x-ui CLI ─────────────────────────────────────
+    # The x-ui binary supports these setting commands:
+    #   x-ui setting -username X -password Y
+    #   x-ui setting -port P
+    #   x-ui setting -webBasePath /path
+    #   x-ui setting -settingAutoSave true
+    log_dim "Configuring 3X-UI credentials..."
+
+    # Run setting commands — the binary initializes its DB on first run
+    "$XUI_BIN" setting -username "$rand_user" -password "$rand_pass" >>"$install_log" 2>&1
+    "$XUI_BIN" setting -port "$rand_port" >>"$install_log" 2>&1
+    "$XUI_BIN" setting -webBasePath "$rand_webpath" >>"$install_log" 2>&1
+
+    # Write credentials to install log in the same format as the official installer
+    # (extract_credentials will parse this)
+    cat >> "$install_log" << CREDLOG
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Username: ${rand_user}
+  Password: ${rand_pass}
+  Port: ${rand_port}
+  WebBasePath: ${rand_webpath}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CREDLOG
+
+    # ── 6. Install systemd service ────────────────────────────────────
     if ! systemctl cat "$XUI_SERVICE" &>/dev/null; then
-        log_dim "Installing systemd service (workaround for v3.x)..."
+        log_dim "Installing systemd service..."
         local service_file=""
-        # Try the debian service file included in the archive
+        # Try service files included in the archive
         for sf in "$XUI_DIR/x-ui.service.debian" "$XUI_DIR/x-ui.service.rhel" "$XUI_DIR/x-ui.service"; do
             [ -f "$sf" ] && { service_file="$sf"; break; }
         done
@@ -284,16 +325,21 @@ SVCEOF
         systemctl daemon-reload 2>/dev/null
     fi
 
-    # Enable and start the service
+    # Create convenience symlink
+    if [ ! -f /usr/bin/x-ui ]; then
+        ln -sf "$XUI_BIN" /usr/bin/x-ui 2>/dev/null
+    fi
+
+    # ── 7. Enable and start ───────────────────────────────────────────
     systemctl enable "$XUI_SERVICE" 2>/dev/null
     systemctl start "$XUI_SERVICE" 2>/dev/null
-    sleep 2
+    sleep 3
 
     if systemctl is-active --quiet "$XUI_SERVICE" 2>/dev/null; then
         log_success "$(t xui_installed)"
     else
         log_error "$(t xui_install_failed) — service failed to start"
-        journalctl -u "$XUI_SERVICE" --no-pager -n 5 2>/dev/null >&2
+        journalctl -u "$XUI_SERVICE" --no-pager -n 10 2>/dev/null >&2
         return 1
     fi
 
