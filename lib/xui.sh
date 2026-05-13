@@ -217,23 +217,29 @@ install_3xui() {
     local tarball="/tmp/x-ui-linux-${arch}.tar.gz"
 
     log_dim "Downloading 3X-UI ${version} (${arch})..."
-    if ! curl -Ls -o "$tarball" "$tarball_url" 2>>"$install_log"; then
-        log_error "$(t xui_install_failed) — download failed"
-        return 1
-    fi
+    local download_ok=false
+    for attempt in 1 2 3; do
+        rm -f "$tarball" 2>/dev/null
+        if curl -Ls --retry 2 --retry-delay 3 -o "$tarball" "$tarball_url" 2>>"$install_log"; then
+            # Verify tarball is valid gzip
+            if file "$tarball" 2>/dev/null | grep -qi "gzip"; then
+                download_ok=true
+                break
+            fi
+        fi
+        [ "$attempt" -lt 3 ] && { log_dim "Download attempt $attempt failed, retrying..."; sleep 5; }
+    done
 
-    # Verify tarball is valid
-    if ! file "$tarball" 2>/dev/null | grep -qi "gzip"; then
-        log_error "$(t xui_install_failed) — downloaded file is not a valid archive"
-        rm -f "$tarball"
+    if [ "$download_ok" != "true" ]; then
+        log_error "$(t xui_install_failed) — download failed after 3 attempts"
+        rm -f "$tarball" 2>/dev/null
         return 1
     fi
 
     # Remove old install dir, extract fresh
     rm -rf "$XUI_DIR" 2>/dev/null
-    mkdir -p "$XUI_DIR"
 
-    # The tarball extracts to x-ui/ directory
+    # The tarball extracts to x-ui/ directory under /usr/local/
     if ! tar -xzf "$tarball" -C /usr/local/ 2>>"$install_log"; then
         log_error "$(t xui_install_failed) — extraction failed"
         rm -f "$tarball"
