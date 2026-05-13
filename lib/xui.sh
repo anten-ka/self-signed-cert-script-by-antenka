@@ -229,15 +229,6 @@ expect {
         send "y\r"
         exp_continue
     }
-    -re {:\s*$} {
-        # Generic colon-prompt (catch-all for unexpected prompts)
-        sleep 1
-        send "\r"
-        exp_continue
-    }
-    -re {\$|#\s*$} {
-        # Shell prompt — installation finished
-    }
     eof {}
     timeout {
         puts "TIMEOUT during 3x-ui installation"
