@@ -165,9 +165,10 @@ install_3xui() {
     local install_cmd
 
     if [ -n "$version" ]; then
-        # Pin to specific version
+        # Pin to specific version — substitute version directly to avoid
+        # Tcl/expect interpreting ${VERSION} as a Tcl variable
         log_info "$(tf xui_installing_version "$version")"
-        install_cmd="VERSION=${version} && bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/\${VERSION}/install.sh) \${VERSION}"
+        install_cmd="bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/${version}/install.sh) ${version}"
     else
         # Latest (master branch)
         install_cmd="bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)"
