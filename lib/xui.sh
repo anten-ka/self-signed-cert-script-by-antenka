@@ -156,9 +156,19 @@ install_3xui() {
     local version="${1:-$XUI_INSTALL_VERSION}"
     log_step "$(t xui_installing)"
 
-    if [ -f "$XUI_BIN" ]; then
+    # Check both binary AND systemd service — a leftover binary without
+    # a working service should trigger a re-install
+    if [ -f "$XUI_BIN" ] && systemctl is-enabled "$XUI_SERVICE" &>/dev/null; then
         log_dim "$(t xui_already_installed)"
         return 0
+    fi
+
+    # Clean up orphaned binary if service is missing
+    if [ -f "$XUI_BIN" ] && ! systemctl is-enabled "$XUI_SERVICE" &>/dev/null; then
+        log_dim "Cleaning up incomplete previous installation..."
+        rm -rf "$XUI_DIR" /usr/bin/x-ui /etc/x-ui 2>/dev/null
+        rm -f /etc/systemd/system/x-ui.service 2>/dev/null
+        systemctl daemon-reload 2>/dev/null
     fi
 
     local install_log="/tmp/xuifast_xui_install.log"
