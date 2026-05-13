@@ -80,10 +80,11 @@ api_create_reality_inbound
 echo "INBOUND_EXIT=$?"
 
 echo "=== STEP 11: generate vless links ==="
-generate_all_vless_links
+SERVER_IP=$(get_server_ip)
+generate_all_vless_links "lite" "$SERVER_IP" "www.google.com"
 echo "LINKS_EXIT=$?"
-echo "VLESS_LINKS_FILE content:"
-cat /etc/xuifast/vless_links.txt 2>/dev/null || echo "NO LINKS FILE"
+echo "VLESS_LINKS_JSON:"
+cat /tmp/xuifast_links.json 2>/dev/null | head -10 || echo "NO LINKS JSON"
 
 echo "=== STEP 12: save credentials ==="
 save_credentials
