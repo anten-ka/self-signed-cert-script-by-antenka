@@ -46,9 +46,12 @@ API_CSRF_TOKEN=""
 # Build curl args array with CSRF header if token is set
 # Usage: local csrf_args=(); _csrf_args csrf_args; curl ... "${csrf_args[@]}"
 _csrf_args() {
-    local -n _arr=$1
-    _arr=()
-    [ -n "$API_CSRF_TOKEN" ] && _arr=(-H "X-CSRF-Token: ${API_CSRF_TOKEN}")
+    local _varname=$1
+    if [ -n "$API_CSRF_TOKEN" ]; then
+        eval "$_varname=(-H \"X-CSRF-Token: \${API_CSRF_TOKEN}\")"
+    else
+        eval "$_varname=()"
+    fi
 }
 
 # ── Setup API base URL ──────────────────────────────────────────────────
@@ -161,9 +164,9 @@ api_set_language() {
     local csrf_args=(); _csrf_args csrf_args
     curl -sk -b "$cookie_file" \
         -X POST "${API_BASE}/panel/setting/update" \
-        -H "Content-Type: application/x-www-form-urlencoded" \
+        -H "Content-Type: application/json" \
         "${csrf_args[@]}" \
-        --data-urlencode "webLang=${panel_lang}" >/dev/null 2>&1
+        -d "{\"webLang\":\"${panel_lang}\"}" >/dev/null 2>&1
 }
 
 # ── Create VLESS Reality inbound (Lite mode) ────────────────────────────
@@ -489,11 +492,21 @@ generate_vless_link_reality() {
     local mask_domain="$4"
     local public_key="$5"
     local short_id="$6"
+    local transport="${7:-tcp}"
 
     local encoded_name
     encoded_name=$(python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))" "$name" 2>/dev/null || echo "$name")
 
-    echo "vless://${uuid}@${server_ip}:443?type=tcp&security=reality&pbk=${public_key}&fp=chrome&sni=${mask_domain}&sid=${short_id}&spx=%2F&flow=xtls-rprx-vision#${encoded_name}"
+    local params="type=${transport}&security=reality&pbk=${public_key}&fp=chrome&sni=${mask_domain}&sid=${short_id}&spx=%2F"
+    if [ "$transport" = "tcp" ]; then
+        params="${params}&flow=xtls-rprx-vision"
+    elif [ "$transport" = "grpc" ]; then
+        params="${params}&serviceName=xuifast&mode=multi"
+    elif [ "$transport" = "xhttp" ]; then
+        params="${params}&path=%2F&mode=auto"
+    fi
+
+    echo "vless://${uuid}@${server_ip}:443?${params}#${encoded_name}"
 }
 
 generate_vless_link_tls() {
@@ -645,8 +658,11 @@ check_client_online() {
     local email="$1"
     local cookie_file="${2:-/tmp/xuifast_cookie.txt}"
 
+    local csrf_args=(); _csrf_args csrf_args
     local resp
-    resp=$(curl -sk -b "$cookie_file" "${API_BASE}/panel/api/inbounds/onlines" 2>/dev/null)
+    resp=$(curl -sk -b "$cookie_file" \
+        "${csrf_args[@]}" \
+        -X POST "${API_BASE}/panel/api/inbounds/onlines" 2>/dev/null)
     if [ -z "$resp" ]; then
         return 1
     fi

@@ -38,25 +38,25 @@ get_categories() {
 
 get_category_name() {
     local cat_id="$1"
-    jq -r ".categories[] | select(.id == \"$cat_id\") | .name" "$CATALOG_FILE" 2>/dev/null
+    jq --arg id "$cat_id" -r '.categories[] | select(.id == $id) | .name' "$CATALOG_FILE" 2>/dev/null
 }
 
 # ── Templates in a category ────────────────────────────────────────────
 get_templates_by_category() {
     local cat_id="$1"
-    jq -r ".categories[] | select(.id == \"$cat_id\") | .templates[] | \"\(.id)|\(.name)|\(.source)|\(.preview_url)\"" "$CATALOG_FILE" 2>/dev/null
+    jq --arg id "$cat_id" -r '.categories[] | select(.id == $id) | .templates[] | "\(.id)|\(.name)|\(.source)|\(.preview_url)"' "$CATALOG_FILE" 2>/dev/null
 }
 
 # ── Template info ──────────────────────────────────────────────────────
 get_template_info() {
     local tpl_id="$1"
-    jq ".categories[].templates[] | select(.id == \"$tpl_id\")" "$CATALOG_FILE" 2>/dev/null
+    jq --arg id "$tpl_id" '.categories[].templates[] | select(.id == $id)' "$CATALOG_FILE" 2>/dev/null
 }
 
 get_template_field() {
     local tpl_id="$1"
     local field="$2"
-    jq -r ".categories[].templates[] | select(.id == \"$tpl_id\") | .$field" "$CATALOG_FILE" 2>/dev/null
+    jq --arg id "$tpl_id" --arg f "$field" -r '.categories[].templates[] | select(.id == $id) | .[$f]' "$CATALOG_FILE" 2>/dev/null
 }
 
 # ── Interactive category picker (returns category id or special __custom_git__/__random__) ──
@@ -108,8 +108,23 @@ select_category() {
         return 0
     fi
 
-    # Random
+    # Random — pick a truly random template from all categories
     if [ "$choice" -eq "$i" ]; then
+        # Collect all template IDs across all categories
+        local all_tpls
+        all_tpls=$(jq -r '.categories[].templates[].id' "$CATALOG_FILE" 2>/dev/null)
+        local tpl_arr=()
+        while IFS= read -r tid; do
+            [ -n "$tid" ] && tpl_arr+=("$tid")
+        done <<< "$all_tpls"
+        if [ ${#tpl_arr[@]} -gt 0 ]; then
+            local random_tpl="${tpl_arr[$((RANDOM % ${#tpl_arr[@]}))]}"
+            # Show preview and confirm
+            show_template_preview "$random_tpl" || return 1
+            echo "__random_tpl__:${random_tpl}"
+            return 0
+        fi
+        # Fallback to random category if jq fails
         local random_cat="${cats[$((RANDOM % ${#cats[@]}))]}"
         echo "$random_cat"
         return 0
@@ -228,45 +243,39 @@ download_template() {
 
     log_info "$(tf templates_downloading "$name")"
 
+    # Shared helper for mono-repo sources (html5up, learning-zone, dawidolko)
+    # Uses git -C instead of cd to avoid changing working directory
+    _clone_sparse() {
+        local _repo="$1" _sparse="$2" _dest="$3" _label="$4"
+        local _tmp="/tmp/${_label}_clone_$$"
+        rm -rf "$_tmp"
+
+        # Try sparse-checkout first (fast, downloads only needed folder)
+        if ! git clone --depth 1 --filter=blob:none --sparse "$_repo" "$_tmp" 2>/dev/null; then
+            # Fallback: full shallow clone
+            if ! git clone --depth 1 "$_repo" "$_tmp" 2>/dev/null; then
+                log_error "git clone failed: $_repo" >&2
+                rm -rf "$_tmp"
+                return 1
+            fi
+        fi
+
+        # Set sparse-checkout (git -C avoids cd)
+        git -C "$_tmp" sparse-checkout set "$_sparse" 2>/dev/null || true
+
+        if [ -d "$_tmp/$_sparse" ]; then
+            cp -r "$_tmp/$_sparse"/* "$_dest/" 2>/dev/null
+        fi
+        rm -rf "$_tmp"
+    }
+
     # HTML5 UP — one repo with folders
     if [ "$source" = "html5up" ]; then
-        local tmp_clone="/tmp/html5up_clone_$$"
-        rm -rf "$tmp_clone"
-
-        # Sparse checkout
-        git clone --depth 1 --filter=blob:none --sparse "$repo_url" "$tmp_clone" 2>/dev/null
-        if [ $? -ne 0 ]; then
-            # Fallback: full clone
-            git clone --depth 1 "$repo_url" "$tmp_clone" 2>/dev/null
-        fi
-
-        if [ -d "$tmp_clone" ]; then
-            cd "$tmp_clone" && git sparse-checkout set "$sparse_path" 2>/dev/null
-            if [ -d "$tmp_clone/$sparse_path" ]; then
-                cp -r "$tmp_clone/$sparse_path"/* "$clone_dir/"
-            fi
-            cd - >/dev/null
-        fi
-        rm -rf "$tmp_clone"
+        _clone_sparse "$repo_url" "$sparse_path" "$clone_dir" "html5up"
 
     # learning-zone — one big repo
     elif [ "$source" = "learning-zone" ]; then
-        local tmp_clone="/tmp/lz_clone_$$"
-        rm -rf "$tmp_clone"
-
-        git clone --depth 1 --filter=blob:none --sparse "$repo_url" "$tmp_clone" 2>/dev/null
-        if [ $? -ne 0 ]; then
-            git clone --depth 1 "$repo_url" "$tmp_clone" 2>/dev/null
-        fi
-
-        if [ -d "$tmp_clone" ]; then
-            cd "$tmp_clone" && git sparse-checkout set "$sparse_path" 2>/dev/null
-            if [ -d "$tmp_clone/$sparse_path" ]; then
-                cp -r "$tmp_clone/$sparse_path"/* "$clone_dir/"
-            fi
-            cd - >/dev/null
-        fi
-        rm -rf "$tmp_clone"
+        _clone_sparse "$repo_url" "$sparse_path" "$clone_dir" "lz"
 
     # StartBootstrap — each template in its own repo
     elif [ "$source" = "startbootstrap" ]; then
@@ -317,21 +326,11 @@ download_template() {
 
     # dawidolko — one big repo with folders (similar to learning-zone)
     elif [ "$source" = "dawidolko" ]; then
-        local tmp_clone="/tmp/dw_clone_$$"
-        rm -rf "$tmp_clone"
-        git clone --depth 1 --filter=blob:none --sparse "$repo_url" "$tmp_clone" 2>/dev/null
-        if [ $? -ne 0 ]; then
-            git clone --depth 1 "$repo_url" "$tmp_clone" 2>/dev/null
-        fi
-        if [ -d "$tmp_clone" ]; then
-            cd "$tmp_clone" && git sparse-checkout set "$sparse_path" 2>/dev/null
-            if [ -d "$tmp_clone/$sparse_path" ]; then
-                cp -r "$tmp_clone/$sparse_path"/* "$clone_dir/"
-            fi
-            cd - >/dev/null
-        fi
-        rm -rf "$tmp_clone"
+        _clone_sparse "$repo_url" "$sparse_path" "$clone_dir" "dw"
     fi
+
+    # Clean up helper
+    unset -f _clone_sparse 2>/dev/null
 
     # Check result
     if [ -f "$clone_dir/index.html" ]; then
@@ -583,6 +582,16 @@ interactive_template_selection() {
     if [ "$cat_id" = "__custom_git__" ]; then
         local template_dir
         template_dir=$(download_custom_git_template)
+        [ $? -ne 0 ] && return 1
+        echo "$template_dir"
+        return 0
+    fi
+
+    # Random template (already selected and confirmed in select_category)
+    if [[ "$cat_id" == __random_tpl__:* ]]; then
+        local tpl_id="${cat_id#__random_tpl__:}"
+        local template_dir
+        template_dir=$(download_template "$tpl_id")
         [ $? -ne 0 ] && return 1
         echo "$template_dir"
         return 0

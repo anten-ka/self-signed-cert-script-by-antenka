@@ -3,12 +3,27 @@
 # Colors, logging, spinner, apt handling, IP/geo detection, JSON config
 
 # ── Version & paths ─────────────────────────────────────────────────────
-XUIFAST_VERSION="3.0.2"
+XUIFAST_VERSION="3.0.3"
 XUIFAST_DIR="${XUIFAST_DIR:-/opt/xuifast}"
 XUIFAST_CONFIG="${XUIFAST_CONFIG:-${XUIFAST_DIR}/config.json}"
 XUI_DIR="/usr/local/x-ui"
 XUI_BIN="${XUI_DIR}/x-ui"
-XRAY_BIN="${XUI_DIR}/bin/xray-linux-amd64"
+get_xray_bin() {
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64|amd64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *) arch="amd64" ;;
+    esac
+    local bin="${XUI_DIR}/bin/xray-linux-${arch}"
+    # Fallback: find any xray binary
+    if [ ! -f "$bin" ]; then
+        bin=$(find "${XUI_DIR}/bin/" -name 'xray*' -type f 2>/dev/null | head -1)
+    fi
+    echo "${bin:-${XUI_DIR}/bin/xray-linux-amd64}"
+}
+XRAY_BIN="$(get_xray_bin)"
 XUI_DB="/etc/x-ui/x-ui.db"
 XUI_SERVICE="x-ui"
 CREDENTIALS_FILE="/root/.xuifast_credentials"
@@ -17,6 +32,9 @@ NGINX_SITE_CONF="/etc/nginx/sites-available/xuifast"
 NGINX_SITE_LINK="/etc/nginx/sites-enabled/xuifast"
 BACKUP_DIR="${XUIFAST_DIR}/backups"
 TEMPLATES_CATALOG="${XUIFAST_DIR}/templates_catalog.json"
+
+# ── Security: restrict temp file permissions ───────────────────────────
+umask 077
 
 # ── Colors ──────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -69,8 +87,8 @@ stop_spinner() {
 run_with_spinner() {
     local msg="$1"; shift
     start_spinner "$msg"
-    "$@"
-    local rc=$?
+    local rc=0
+    "$@" || rc=$?
     stop_spinner
     return $rc
 }
@@ -381,9 +399,42 @@ check_disk_space() {
 
 # ── Cleanup trap helper ────────────────────────────────────────────────
 cleanup_temp_files() {
-    rm -f /tmp/xuifast_*.json /tmp/xuifast_*.txt /tmp/xuifast_*.log 2>/dev/null
+    rm -f /tmp/xuifast_cookie.txt /tmp/xuifast_login_resp.json /tmp/xuifast_api_resp.json /tmp/xuifast_payload.json 2>/dev/null
     rm -rf /tmp/xuifast_clone_* 2>/dev/null
     stop_spinner
+}
+
+# ── Safe credentials reader (no eval/source) ──────────────────────────
+safe_read_credentials() {
+    local file="${1:-$CREDENTIALS_FILE}"
+    [ -f "$file" ] || return 1
+    while IFS='=' read -r key value; do
+        # Strip quotes
+        value="${value#\"}"
+        value="${value%\"}"
+        value="${value#\'}"
+        value="${value%\'}"
+        case "$key" in
+            XUI_PORT) XUI_PORT="$value" ;;
+            XUI_USER) XUI_USER="$value" ;;
+            XUI_PASS) XUI_PASS="$value" ;;
+            XUI_WEB_PATH) XUI_WEB_PATH="$value" ;;
+        esac
+    done < "$file"
+}
+
+# ── Safe process kill on port (fuser may not be installed) ─────────────
+kill_port() {
+    local port="$1"
+    if command -v fuser &>/dev/null; then
+        fuser -k "${port}/tcp" 2>/dev/null || true
+    elif command -v lsof &>/dev/null; then
+        lsof -ti :"$port" 2>/dev/null | xargs -r kill 2>/dev/null || true
+    elif command -v ss &>/dev/null; then
+        local pids
+        pids=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | sort -u)
+        for pid in $pids; do kill "$pid" 2>/dev/null; done
+    fi
 }
 
 # ── Banner ──────────────────────────────────────────────────────────────

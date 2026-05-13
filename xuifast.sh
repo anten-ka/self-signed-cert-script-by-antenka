@@ -193,6 +193,7 @@ install_pro() {
     echo -e "  $(t config_domain)   ${CYAN}${domain}${NC}"
     echo -e "  $(t config_port)     ${CYAN}443${NC}"
     echo -e "  $(t config_mode)     ${CYAN}Pro (TLS)${NC}"
+    echo -e "  $(t config_transport) ${CYAN}${XUI_TRANSPORT^^}${NC}"
     echo -e "  $(t config_users)    ${CYAN}10${NC}"
     echo ""
 
@@ -201,11 +202,18 @@ install_pro() {
     # 6. Select 3X-UI version (Legacy 2.x or New 3.x)
     select_xui_version
 
+    # 6b. Select transport protocol (TCP / XHTTP / gRPC)
+    select_transport
+
     # 7. Install dependencies
     install_dependencies || return 1
 
-    # 8. Stop anything on port 443
-    fuser -k 443/tcp 2>/dev/null || true
+    # 8. Free port 443 if occupied (but not xray — it might be our running VPN)
+    local port443_proc
+    port443_proc=$(ss -tlnp 'sport = :443' 2>/dev/null | grep -oP 'users:\(\("\K[^"]+' | head -1)
+    if [ -n "$port443_proc" ] && [ "$port443_proc" != "xray-linux-amd6" ] && [ "$port443_proc" != "xray-linux-arm6" ]; then
+        kill_port 443
+    fi
 
     # 8. Setup website + SSL first (needs port 80 and 443 free)
     if [ -n "$template_dir" ]; then
@@ -258,6 +266,7 @@ install_pro() {
     config_set "domain" "$domain"
     config_set "server_ip" "$server_ip"
     config_set "email" "$email"
+    config_set "transport" "$XUI_TRANSPORT"
     config_set_int "port" 443
     config_set_int "users_count" 10
     config_set "version" "$XUIFAST_VERSION"
@@ -408,7 +417,8 @@ show_dashboard() {
     esac
     case "$nginx_st" in
         running) nginx_icon="${GREEN}●${NC}" ;;
-        *)       nginx_icon="${RED}○${NC}" ;;
+        stopped) nginx_icon="${YELLOW}○${NC}" ;;
+        *)       nginx_icon="${RED}✗${NC}" ;;
     esac
 
     echo -e "  ${BOLD}$(t dashboard_title)${NC}"
