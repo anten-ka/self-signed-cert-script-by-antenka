@@ -186,15 +186,28 @@ obtain_ssl_certificate() {
         certbot_args+=(--register-unsafely-without-email)
     fi
 
-    if certbot "${certbot_args[@]}" 2>/dev/null; then
-        log_success "SSL certificate obtained for $domain"
-        return 0
-    else
-        log_error "Failed to obtain SSL certificate"
-        log_dim "Make sure $domain points to this server's IP"
-        log_dim "and port 80 is open in the firewall."
-        return 1
-    fi
+    # Wait for nginx to be fully ready
+    sleep 2
+
+    # Try certbot with one retry (handles transient nginx timing issues)
+    local attempt
+    for attempt in 1 2; do
+        if certbot "${certbot_args[@]}" 2>/dev/null; then
+            log_success "SSL certificate obtained for $domain"
+            return 0
+        fi
+        if [ "$attempt" -eq 1 ]; then
+            log_warning "Certbot attempt 1 failed, retrying in 5s..."
+            sleep 5
+            systemctl restart nginx 2>/dev/null || true
+            sleep 2
+        fi
+    done
+
+    log_error "Failed to obtain SSL certificate"
+    log_dim "Make sure $domain points to this server's IP"
+    log_dim "and port 80 is open in the firewall."
+    return 1
 }
 
 # ── Auto-renewal setup ──────────────────────────────────────────────────
