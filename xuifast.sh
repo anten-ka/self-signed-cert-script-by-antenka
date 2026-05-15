@@ -86,40 +86,51 @@ install_lite() {
     # 7. Install dependencies
     install_dependencies || return 1
 
-    # 8. Install 3X-UI
+    # 8. Install 3X-UI (critical — must succeed)
     install_3xui || return 1
 
-    # 9. Extract credentials
+    # 9. Extract credentials & setup API (critical for panel access)
     extract_credentials
     save_credentials
     setup_api_base
 
-    # 10. Wait for API
-    run_with_spinner "$(t api_waiting)" wait_for_api 90 || return 1
+    # === Auto-configuration (best-effort) ===
+    # Panel is already installed and accessible at this point.
+    # The following steps configure VPN automatically but are NOT fatal.
+    local auto_ok=true
 
-    # 11. Login
-    api_login_with_retry || return 1
+    # 10. Wait for API & login
+    if run_with_spinner "$(t api_waiting)" wait_for_api 90 && api_login_with_retry; then
+        api_set_language "$LANG_CODE"
+    else
+        log_warning "$(t api_login_fail_manual)"
+        auto_ok=false
+    fi
 
-    # 12. Set panel language
-    api_set_language "$LANG_CODE"
+    # 11. Generate Reality keypair + users + inbound
+    if $auto_ok; then
+        if generate_reality_keypair && \
+           generate_clients "$users_count" "lite" && \
+           api_create_reality_inbound "$mask_domain"; then
+            log_info "$(tf users_creating "$users_count")"
+            # Restart x-ui so xray picks up the new inbound
+            systemctl restart x-ui 2>/dev/null || true
+            sleep 2
+        else
+            log_warning "$(t auto_config_fail)"
+            auto_ok=false
+        fi
+    fi
 
-    # 10. Generate Reality keypair
-    generate_reality_keypair || return 1
+    # 12. Generate VLESS links
+    if $auto_ok; then
+        generate_all_vless_links "lite" "$server_ip" "$mask_domain" || auto_ok=false
+    fi
 
-    # 11. Generate users
-    log_info "$(tf users_creating "$users_count")"
-    generate_clients "$users_count" "lite" || return 1
-
-    # 12. Create Reality inbound
-    api_create_reality_inbound "$mask_domain" || return 1
-
-    # 13. Generate VLESS links
-    generate_all_vless_links "lite" "$server_ip" "$mask_domain" || return 1
-
-    # 14. Setup stub nginx (optional, for port 80)
+    # 13. Setup stub nginx (optional, for port 80)
     setup_lite_nginx || log_warning "$(t lite_nginx_optional_fail)"
 
-    # 15. Save config
+    # 14. Save config
     config_set "mode" "lite"
     config_set "mask_domain" "$mask_domain"
     config_set "server_ip" "$server_ip"
@@ -131,11 +142,11 @@ install_lite() {
     config_set "version" "$XUIFAST_VERSION"
     config_set "installed_at" "$(date -Iseconds)"
 
-    # 15. Save Reality keys to config
-    config_set "reality_private_key" "$REALITY_PRIVATE_KEY"
-    config_set "reality_public_key" "$REALITY_PUBLIC_KEY"
+    # Save Reality keys to config (if generated)
+    [ -n "${REALITY_PRIVATE_KEY:-}" ] && config_set "reality_private_key" "$REALITY_PRIVATE_KEY"
+    [ -n "${REALITY_PUBLIC_KEY:-}" ] && config_set "reality_public_key" "$REALITY_PUBLIC_KEY"
 
-    # 16. Done!
+    # 15. Done!
     echo ""
     echo -e "  ${GREEN}${BOLD}════════════════════════════════════════════════════${NC}"
     echo -e "  ${GREEN}${BOLD}  $(tf install_done "$XUIFAST_VERSION" "Lite")${NC}"
@@ -143,6 +154,11 @@ install_lite() {
     echo ""
 
     show_credentials
+
+    if ! $auto_ok; then
+        log_warning "$(t auto_config_incomplete)"
+    fi
+
     post_install_flow "lite" "$server_ip" "$mask_domain"
 }
 
@@ -250,36 +266,48 @@ install_pro() {
     # 9. Stop nginx on 443 — xray will take over
     # nginx stays on :80, xray takes :443 with fallback to :80
 
-    # 10. Install 3X-UI
+    # 10. Install 3X-UI (critical — must succeed)
     install_3xui || return 1
 
-    # 11. Extract credentials
+    # 11. Extract credentials & setup API (critical for panel access)
     extract_credentials
     save_credentials
     setup_api_base
 
-    # 12. Wait for API
-    run_with_spinner "$(t api_waiting)" wait_for_api 90 || return 1
+    # === Auto-configuration (best-effort) ===
+    # Panel is already installed and accessible at this point.
+    local auto_ok=true
 
-    # 13. Login
-    api_login_with_retry || return 1
+    # 12. Wait for API & login
+    if run_with_spinner "$(t api_waiting)" wait_for_api 90 && api_login_with_retry; then
+        api_set_language "$LANG_CODE"
+    else
+        log_warning "$(t api_login_fail_manual)"
+        auto_ok=false
+    fi
 
-    # 14. Set panel language
-    api_set_language "$LANG_CODE"
+    # 13. Generate users + TLS inbound
+    if $auto_ok; then
+        local cert_file="/etc/letsencrypt/live/${domain}/fullchain.pem"
+        local key_file="/etc/letsencrypt/live/${domain}/privkey.pem"
+        if generate_clients "$users_count" "pro" && \
+           api_create_tls_inbound "$domain" "$cert_file" "$key_file"; then
+            log_info "$(tf users_creating "$users_count")"
+            # Restart x-ui so xray picks up the new inbound
+            systemctl restart x-ui 2>/dev/null || true
+            sleep 2
+        else
+            log_warning "$(t auto_config_fail)"
+            auto_ok=false
+        fi
+    fi
 
-    # 15. Generate users
-    log_info "$(tf users_creating "$users_count")"
-    generate_clients "$users_count" "pro" || return 1
+    # 14. Generate VLESS links
+    if $auto_ok; then
+        generate_all_vless_links "pro" "$domain" || auto_ok=false
+    fi
 
-    # 16. Create TLS inbound
-    local cert_file="/etc/letsencrypt/live/${domain}/fullchain.pem"
-    local key_file="/etc/letsencrypt/live/${domain}/privkey.pem"
-    api_create_tls_inbound "$domain" "$cert_file" "$key_file" || return 1
-
-    # 17. Generate VLESS links
-    generate_all_vless_links "pro" "$domain" || return 1
-
-    # 18. Save config
+    # 15. Save config
     config_set "mode" "pro"
     config_set "domain" "$domain"
     config_set "server_ip" "$server_ip"
@@ -292,7 +320,7 @@ install_pro() {
     config_set "xui_branch" "$XUI_BRANCH"
     [ -n "$XUI_INSTALL_VERSION" ] && config_set "xui_version" "$XUI_INSTALL_VERSION"
 
-    # 19. Done!
+    # 16. Done!
     echo ""
     echo -e "  ${GREEN}${BOLD}════════════════════════════════════════════════════${NC}"
     echo -e "  ${GREEN}${BOLD}  $(tf install_done "$XUIFAST_VERSION" "Pro")${NC}"
@@ -300,6 +328,11 @@ install_pro() {
     echo ""
 
     show_credentials
+
+    if ! $auto_ok; then
+        log_warning "$(t auto_config_incomplete)"
+    fi
+
     post_install_flow "pro" "$domain"
 }
 

@@ -3,7 +3,7 @@
 # Colors, logging, spinner, apt handling, IP/geo detection, JSON config
 
 # ── Version & paths ─────────────────────────────────────────────────────
-XUIFAST_VERSION="3.0.5"
+XUIFAST_VERSION="3.0.6"
 XUIFAST_DIR="${XUIFAST_DIR:-/opt/xuifast}"
 XUIFAST_CONFIG="${XUIFAST_CONFIG:-${XUIFAST_DIR}/config.json}"
 XUI_DIR="/usr/local/x-ui"
@@ -49,12 +49,13 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # ── Logging ─────────────────────────────────────────────────────────────
-log_info()    { echo -e "  ${CYAN}ℹ${NC}  $*"; }
-log_success() { echo -e "  ${GREEN}✓${NC}  $*"; }
-log_warning() { echo -e "  ${YELLOW}⚠${NC}  $*"; }
-log_error()   { echo -e "  ${RED}✗${NC}  $*"; }
-log_step()    { echo -e "\n  ${BOLD}${WHITE}▸ $*${NC}"; }
-log_dim()     { echo -e "  ${DIM}$*${NC}"; }
+# All log functions write to stderr to avoid polluting stdout in $() captures
+log_info()    { echo -e "  ${CYAN}ℹ${NC}  $*" >&2; }
+log_success() { echo -e "  ${GREEN}✓${NC}  $*" >&2; }
+log_warning() { echo -e "  ${YELLOW}⚠${NC}  $*" >&2; }
+log_error()   { echo -e "  ${RED}✗${NC}  $*" >&2; }
+log_step()    { echo -e "\n  ${BOLD}${WHITE}▸ $*${NC}" >&2; }
+log_dim()     { echo -e "  ${DIM}$*${NC}" >&2; }
 
 # ── Spinner ─────────────────────────────────────────────────────────────
 SPINNER_PID=""
