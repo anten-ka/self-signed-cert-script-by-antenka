@@ -623,6 +623,13 @@ show_credentials() {
     echo -e "  ${BOLD}${YELLOW}$(t creds_save_warning)${NC}"
     echo -e "  ${line}"
     echo ""
+    echo -e "  ${CYAN}$(t cert_info_title)${NC}"
+    echo -e "  $(t cert_info_1)"
+    echo -e "  $(t cert_info_2)"
+    echo ""
+    echo -e "  ${GREEN}$(t cert_info_ready)${NC}"
+    echo -e "  ${line}"
+    echo ""
 }
 
 # ── Display user links with QR ──────────────────────────────────────────

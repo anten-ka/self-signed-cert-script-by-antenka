@@ -141,6 +141,10 @@ I18N[creds_user]="Login:"
 I18N[creds_pass]="Password:"
 I18N[creds_saved]="Credentials saved to %s"
 I18N[creds_save_warning]="SAVE THESE CREDENTIALS!"
+I18N[cert_info_title]="Certificate info:"
+I18N[cert_info_1]="10-year certificates are no longer issued."
+I18N[cert_info_2]="The panel auto-generates a 6-day cert and renews it automatically."
+I18N[cert_info_ready]="Ready to go — no manual certificate setup needed!"
 
 # ── Connection test ────────────────────────────────────────────────────
 I18N[test_title]="🔍 Connection test"
