@@ -224,7 +224,7 @@ get_server_ip() {
         fi
     done
     # Fallback to local interface
-    raw_ip=$(ip -4 addr show scope global 2>/dev/null | grep -o 'inet [0-9.]*' | sed 's/inet //' | head -1)
+    raw_ip=$(ip -4 addr show scope global 2>/dev/null | grep -o 'inet [0-9.]*' | sed 's/inet //' | head -1) || true
     if _valid_ip "$raw_ip"; then
         echo "$raw_ip"
         return 0
@@ -433,7 +433,7 @@ kill_port() {
         lsof -ti :"$port" 2>/dev/null | xargs -r kill 2>/dev/null || true
     elif command -v ss &>/dev/null; then
         local pids
-        pids=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -o 'pid=[0-9]*' | sed 's/pid=//' | sort -u)
+        pids=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -o 'pid=[0-9]*' | sed 's/pid=//' | sort -u) || true
         for pid in $pids; do kill "$pid" 2>/dev/null; done
     fi
 }

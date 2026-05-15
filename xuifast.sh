@@ -244,7 +244,7 @@ install_pro() {
 
     # 8. Free port 443 if occupied (but not xray — it might be our running VPN)
     local port443_proc
-    port443_proc=$(ss -tlnp 'sport = :443' 2>/dev/null | grep -o 'users:(("[^"]*' | sed 's/users:(("//' | head -1)
+    port443_proc=$(ss -tlnp 'sport = :443' 2>/dev/null | grep -o 'users:(("[^"]*' | sed 's/users:(("//' | head -1) || true
     if [ -n "$port443_proc" ] && [ "$port443_proc" != "xray-linux-amd6" ] && [ "$port443_proc" != "xray-linux-arm6" ]; then
         kill_port 443
     fi
