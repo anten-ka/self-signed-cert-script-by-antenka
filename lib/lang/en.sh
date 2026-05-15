@@ -140,6 +140,7 @@ I18N[creds_url]="URL:"
 I18N[creds_user]="Login:"
 I18N[creds_pass]="Password:"
 I18N[creds_saved]="Credentials saved to %s"
+I18N[creds_save_warning]="SAVE THESE CREDENTIALS!"
 
 # ── Connection test ────────────────────────────────────────────────────
 I18N[test_title]="🔍 Connection test"

@@ -140,6 +140,7 @@ I18N[creds_url]="URL:"
 I18N[creds_user]="Логин:"
 I18N[creds_pass]="Пароль:"
 I18N[creds_saved]="Данные сохранены в %s"
+I18N[creds_save_warning]="ОБЯЗАТЕЛЬНО СОХРАНИТЕ ЭТИ ДАННЫЕ!"
 
 # ── Connection test ────────────────────────────────────────────────────
 I18N[test_title]="🔍 Проверка подключения"

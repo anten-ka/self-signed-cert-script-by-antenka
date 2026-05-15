@@ -607,16 +607,20 @@ PYEOF
 # ── Display credentials box ─────────────────────────────────────────────
 show_credentials() {
     local ip
-    ip=$(get_server_ip)
+    ip=$(get_server_ip 2>/dev/null) || ip="localhost"
+
+    local url="https://${ip}:${XUI_PORT}${XUI_WEB_PATH}"
 
     echo ""
-    echo -e "  ${YELLOW}╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "  ${YELLOW}╔══════════════════════════════════════════════════════════╗${NC}"
     echo -e "  ${YELLOW}║${NC}  ${BOLD}$(t creds_title)${NC}"
-    echo -e "  ${YELLOW}╠══════════════════════════════════════════════════════╣${NC}"
-    echo -e "  ${YELLOW}║${NC}  $(t creds_url)   ${CYAN}https://${ip}:${XUI_PORT}${XUI_WEB_PATH}${NC}"
+    echo -e "  ${YELLOW}╠══════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${YELLOW}║${NC}  $(t creds_user)  ${CYAN}${XUI_USER}${NC}"
     echo -e "  ${YELLOW}║${NC}  $(t creds_pass)  ${CYAN}${XUI_PASS}${NC}"
-    echo -e "  ${YELLOW}╚══════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${YELLOW}║${NC}  $(t creds_url)   ${CYAN}${url}${NC}"
+    echo -e "  ${YELLOW}╠══════════════════════════════════════════════════════════╣${NC}"
+    echo -e "  ${YELLOW}║${NC}  ${BOLD}${YELLOW}⚠  $(t creds_save_warning)${NC}"
+    echo -e "  ${YELLOW}╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
