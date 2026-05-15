@@ -439,15 +439,14 @@ extract_credentials() {
     # v3.x format: "Username:    tiwcBwDS1y" (with ANSI color codes)
     # v2.x format: "username: admin"
     # Strip ANSI codes first, then parse case-insensitively
+    # NOTE: avoid grep -P (PCRE) — variable-length lookbehinds fail on some systems
     if [ -f "$install_log" ]; then
         local clean_log
-        clean_log=$(sed 's/\x1b\[[0-9;]*m//g' "$install_log" 2>/dev/null)
-        username=$(echo "$clean_log" | grep -ioP '(?<=username:\s{0,10})\S+' 2>/dev/null | tail -1 | tr -d '[:space:]')
-        password=$(echo "$clean_log" | grep -ioP '(?<=password:\s{0,10})\S+' 2>/dev/null | tail -1 | tr -d '[:space:]')
-        port=$(echo "$clean_log" | grep -ioP '(?<=port:\s{0,10})\d+' 2>/dev/null | tail -1 | tr -d '[:space:]')
-        # v3.x: "WebBasePath: lCb8E25Wh22wIp3HIJ" (no leading slash)
-        # v2.x: "webBasePath: /abc"
-        web_path=$(echo "$clean_log" | grep -ioP '(?<=webbasepath:\s{0,10})\S+' 2>/dev/null | tail -1 | tr -d '[:space:]')
+        clean_log=$(sed 's/\x1b\[[0-9;]*m//g' "$install_log" 2>/dev/null) || true
+        username=$(echo "$clean_log" | grep -i 'username:' | tail -1 | sed 's/.*[Uu]sername:[[:space:]]*//' | tr -d '[:space:]') || true
+        password=$(echo "$clean_log" | grep -i 'password:' | tail -1 | sed 's/.*[Pp]assword:[[:space:]]*//' | tr -d '[:space:]') || true
+        port=$(echo "$clean_log" | grep -i 'port:' | grep -v 'webbasepath\|WebBasePath' | tail -1 | sed 's/.*[Pp]ort:[[:space:]]*//' | tr -d '[:space:]') || true
+        web_path=$(echo "$clean_log" | grep -i 'webbasepath:' | tail -1 | sed 's/.*[Ww]eb[Bb]ase[Pp]ath:[[:space:]]*//' | tr -d '[:space:]') || true
     fi
 
     # Method 2: fallback to sqlite

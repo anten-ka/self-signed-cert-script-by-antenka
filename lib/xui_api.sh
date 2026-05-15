@@ -103,7 +103,7 @@ api_login() {
     # Step 1: GET the panel page to obtain session cookie and CSRF token
     local html
     html=$(curl -sk -c "$cookie_file" "${API_BASE}/" 2>/dev/null)
-    API_CSRF_TOKEN=$(echo "$html" | grep -oP '(?<=csrf-token" content=")[^"]+' 2>/dev/null)
+    API_CSRF_TOKEN=$(echo "$html" | grep -o 'csrf-token" content="[^"]*' | sed 's/csrf-token" content="//' 2>/dev/null) || true
 
     # Step 2: POST login with session cookie and CSRF token
     local http_code
@@ -124,7 +124,7 @@ api_login() {
             local post_html
             post_html=$(curl -sk -b "$cookie_file" "${API_BASE}/" 2>/dev/null)
             local new_token
-            new_token=$(echo "$post_html" | grep -oP '(?<=csrf-token" content=")[^"]+' 2>/dev/null)
+            new_token=$(echo "$post_html" | grep -o 'csrf-token" content="[^"]*' | sed 's/csrf-token" content="//' 2>/dev/null) || true
             [ -n "$new_token" ] && API_CSRF_TOKEN="$new_token"
             log_success "$(t api_login_ok)"
             return 0

@@ -3,7 +3,7 @@
 # Colors, logging, spinner, apt handling, IP/geo detection, JSON config
 
 # ── Version & paths ─────────────────────────────────────────────────────
-XUIFAST_VERSION="3.0.4"
+XUIFAST_VERSION="3.0.5"
 XUIFAST_DIR="${XUIFAST_DIR:-/opt/xuifast}"
 XUIFAST_CONFIG="${XUIFAST_CONFIG:-${XUIFAST_DIR}/config.json}"
 XUI_DIR="/usr/local/x-ui"
@@ -223,7 +223,7 @@ get_server_ip() {
         fi
     done
     # Fallback to local interface
-    raw_ip=$(ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+    raw_ip=$(ip -4 addr show scope global 2>/dev/null | grep -o 'inet [0-9.]*' | sed 's/inet //' | head -1)
     if _valid_ip "$raw_ip"; then
         echo "$raw_ip"
         return 0
@@ -432,7 +432,7 @@ kill_port() {
         lsof -ti :"$port" 2>/dev/null | xargs -r kill 2>/dev/null || true
     elif command -v ss &>/dev/null; then
         local pids
-        pids=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | sort -u)
+        pids=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -o 'pid=[0-9]*' | sed 's/pid=//' | sort -u)
         for pid in $pids; do kill "$pid" 2>/dev/null; done
     fi
 }
