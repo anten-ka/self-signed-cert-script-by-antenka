@@ -479,6 +479,7 @@ extract_credentials() {
 
     # Normalize web_path: ensure leading /
     [[ "$XUI_WEB_PATH" != /* ]] && XUI_WEB_PATH="/${XUI_WEB_PATH}"
+    return 0
 }
 
 # ── Save credentials to file ───────────────────────────────────────────
