@@ -216,7 +216,7 @@ install_dependencies() {
 get_server_ip() {
     local raw_ip
     for svc in ifconfig.me api.ipify.org icanhazip.com ipinfo.io/ip; do
-        raw_ip=$(curl -s --max-time 10 "$svc" 2>/dev/null | tr -d '[:space:]')
+        raw_ip=$(curl -s --max-time 10 "$svc" 2>/dev/null | tr -d '[:space:]') || true
         if _valid_ip "$raw_ip"; then
             echo "$raw_ip"
             return 0
@@ -253,9 +253,9 @@ get_ip_country() {
 
     # Try ipinfo.io first (lightweight, no key needed)
     if [ -n "$ip" ]; then
-        country=$(curl -s --max-time 5 "https://ipinfo.io/${ip}/country" 2>/dev/null | tr -d '[:space:]"')
+        country=$(curl -s --max-time 5 "https://ipinfo.io/${ip}/country" 2>/dev/null | tr -d '[:space:]"') || true
     else
-        country=$(curl -s --max-time 5 "https://ipinfo.io/country" 2>/dev/null | tr -d '[:space:]"')
+        country=$(curl -s --max-time 5 "https://ipinfo.io/country" 2>/dev/null | tr -d '[:space:]"') || true
     fi
 
     # Validate: must be 2 uppercase letters
@@ -266,9 +266,9 @@ get_ip_country() {
 
     # Fallback: ip-api.com
     if [ -n "$ip" ]; then
-        country=$(curl -s --max-time 5 "http://ip-api.com/line/${ip}?fields=countryCode" 2>/dev/null | tr -d '[:space:]')
+        country=$(curl -s --max-time 5 "http://ip-api.com/line/${ip}?fields=countryCode" 2>/dev/null | tr -d '[:space:]') || true
     else
-        country=$(curl -s --max-time 5 "http://ip-api.com/line/?fields=countryCode" 2>/dev/null | tr -d '[:space:]')
+        country=$(curl -s --max-time 5 "http://ip-api.com/line/?fields=countryCode" 2>/dev/null | tr -d '[:space:]') || true
     fi
 
     if [[ "$country" =~ ^[A-Z]{2}$ ]]; then

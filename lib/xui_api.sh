@@ -61,7 +61,7 @@ setup_api_base() {
     # Try HTTPS first (in case panel has TLS enabled), fall back to HTTP
     local code
     code=$(curl -sk -o /dev/null -w '%{http_code}' \
-        "https://127.0.0.1:${XUI_PORT}${base_path}/" 2>/dev/null)
+        "https://127.0.0.1:${XUI_PORT}${base_path}/" 2>/dev/null) || true
     if [ "$code" != "000" ] && [ "$code" != "" ]; then
         API_BASE="https://127.0.0.1:${XUI_PORT}${base_path}"
     else
@@ -80,7 +80,7 @@ wait_for_api() {
         for proto in https http; do
             local code
             code=$(curl -sk -o /dev/null -w '%{http_code}' \
-                "${proto}://127.0.0.1:${XUI_PORT}${base_path}/" 2>/dev/null)
+                "${proto}://127.0.0.1:${XUI_PORT}${base_path}/" 2>/dev/null) || true
             if [ "$code" = "200" ]; then
                 API_BASE="${proto}://127.0.0.1:${XUI_PORT}${base_path}"
                 return 0
@@ -102,7 +102,7 @@ api_login() {
     # 3X-UI v3.x requires CSRF token from the HTML page for POST requests
     # Step 1: GET the panel page to obtain session cookie and CSRF token
     local html
-    html=$(curl -sk -c "$cookie_file" "${API_BASE}/" 2>/dev/null)
+    html=$(curl -sk -c "$cookie_file" "${API_BASE}/" 2>/dev/null) || true
     API_CSRF_TOKEN=$(echo "$html" | grep -o 'csrf-token" content="[^"]*' | sed 's/csrf-token" content="//' 2>/dev/null) || true
 
     # Step 2: POST login with session cookie and CSRF token
