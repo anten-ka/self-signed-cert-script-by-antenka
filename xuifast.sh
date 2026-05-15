@@ -54,53 +54,61 @@ install_lite() {
     local mask_domain
     mask_domain=$(select_reality_domain "$server_ip") || return 1
 
-    # 2. Show config summary
+    # 2. Select 3X-UI version (Legacy 2.x or New 3.x)
+    select_xui_version
+
+    # 3. Select transport protocol (TCP / XHTTP / gRPC)
+    select_transport
+
+    # 4. Ask how many keys
+    echo ""
+    echo -ne "  $(t users_ask_count) $(t users_ask_count_hint): "
+    local users_count_input
+    read -r users_count_input
+    local users_count="${users_count_input:-3}"
+    # Validate: must be number 1-100
+    if ! [[ "$users_count" =~ ^[0-9]+$ ]] || [ "$users_count" -lt 1 ] || [ "$users_count" -gt 100 ]; then
+        users_count=3
+    fi
+
+    # 5. Show config summary (all choices visible before confirm)
     print_header "$(t config_title)"
     echo -e "  $(t config_ip)       ${CYAN}${server_ip}${NC}"
     echo -e "  $(t config_port)     ${CYAN}443${NC}"
     echo -e "  $(t config_mode)     ${CYAN}Lite (Reality)${NC}"
     echo -e "  $(t config_mask)     ${CYAN}${mask_domain}${NC}"
-    echo -e "  $(t config_users)    ${CYAN}10${NC}"
+    echo -e "  $(t config_transport) ${CYAN}${XUI_TRANSPORT^^}${NC}"
+    echo -e "  $(t config_users)    ${CYAN}${users_count}${NC}"
     echo ""
 
     confirm "$(t config_confirm)" || return 0
 
-    # 3. Select 3X-UI version (Legacy 2.x or New 3.x)
-    select_xui_version
-
-    # 3b. Select transport protocol (TCP / XHTTP / gRPC)
-    select_transport
-
-    # 4. Show transport in summary
-    echo -e "  $(t config_transport) ${CYAN}${XUI_TRANSPORT^^}${NC}"
-    echo ""
-
-    # 5. Install dependencies
+    # 7. Install dependencies
     install_dependencies || return 1
 
-    # 5. Install 3X-UI (version selected in step 3)
+    # 8. Install 3X-UI
     install_3xui || return 1
 
-    # 6. Extract credentials
+    # 9. Extract credentials
     extract_credentials
     save_credentials
     setup_api_base
 
-    # 7. Wait for API
+    # 10. Wait for API
     run_with_spinner "$(t api_waiting)" wait_for_api 90 || return 1
 
-    # 8. Login
+    # 11. Login
     api_login_with_retry || return 1
 
-    # 9. Set panel language
+    # 12. Set panel language
     api_set_language "$LANG_CODE"
 
     # 10. Generate Reality keypair
     generate_reality_keypair || return 1
 
-    # 11. Generate 10 users
-    log_info "$(tf users_creating 10)"
-    generate_clients 10 "lite" || return 1
+    # 11. Generate users
+    log_info "$(tf users_creating "$users_count")"
+    generate_clients "$users_count" "lite" || return 1
 
     # 12. Create Reality inbound
     api_create_reality_inbound "$mask_domain" || return 1
@@ -119,7 +127,7 @@ install_lite() {
     config_set "xui_branch" "$XUI_BRANCH"
     [ -n "$XUI_INSTALL_VERSION" ] && config_set "xui_version" "$XUI_INSTALL_VERSION"
     config_set_int "port" 443
-    config_set_int "users_count" 10
+    config_set_int "users_count" "$users_count"
     config_set "version" "$XUIFAST_VERSION"
     config_set "installed_at" "$(date -Iseconds)"
 
@@ -187,23 +195,33 @@ install_pro() {
         fi
     fi
 
-    # 5. Show config summary
-    print_header "$(t config_title)"
-    echo -e "  $(t config_ip)       ${CYAN}${server_ip}${NC}"
-    echo -e "  $(t config_domain)   ${CYAN}${domain}${NC}"
-    echo -e "  $(t config_port)     ${CYAN}443${NC}"
-    echo -e "  $(t config_mode)     ${CYAN}Pro (TLS)${NC}"
-    echo -e "  $(t config_transport) ${CYAN}${XUI_TRANSPORT^^}${NC}"
-    echo -e "  $(t config_users)    ${CYAN}10${NC}"
+    # 5. Ask how many keys
     echo ""
-
-    confirm "$(t config_confirm)" || return 0
+    echo -ne "  $(t users_ask_count) $(t users_ask_count_hint): "
+    local users_count_input
+    read -r users_count_input
+    local users_count="${users_count_input:-3}"
+    if ! [[ "$users_count" =~ ^[0-9]+$ ]] || [ "$users_count" -lt 1 ] || [ "$users_count" -gt 100 ]; then
+        users_count=3
+    fi
 
     # 6. Select 3X-UI version (Legacy 2.x or New 3.x)
     select_xui_version
 
     # 6b. Select transport protocol (TCP / XHTTP / gRPC)
     select_transport
+
+    # 7. Show config summary
+    print_header "$(t config_title)"
+    echo -e "  $(t config_ip)       ${CYAN}${server_ip}${NC}"
+    echo -e "  $(t config_domain)   ${CYAN}${domain}${NC}"
+    echo -e "  $(t config_port)     ${CYAN}443${NC}"
+    echo -e "  $(t config_mode)     ${CYAN}Pro (TLS)${NC}"
+    echo -e "  $(t config_transport) ${CYAN}${XUI_TRANSPORT^^}${NC}"
+    echo -e "  $(t config_users)    ${CYAN}${users_count}${NC}"
+    echo ""
+
+    confirm "$(t config_confirm)" || return 0
 
     # 7. Install dependencies
     install_dependencies || return 1
@@ -249,9 +267,9 @@ install_pro() {
     # 14. Set panel language
     api_set_language "$LANG_CODE"
 
-    # 15. Generate 10 users
-    log_info "$(tf users_creating 10)"
-    generate_clients 10 "pro" || return 1
+    # 15. Generate users
+    log_info "$(tf users_creating "$users_count")"
+    generate_clients "$users_count" "pro" || return 1
 
     # 16. Create TLS inbound
     local cert_file="/etc/letsencrypt/live/${domain}/fullchain.pem"
@@ -268,7 +286,7 @@ install_pro() {
     config_set "email" "$email"
     config_set "transport" "$XUI_TRANSPORT"
     config_set_int "port" 443
-    config_set_int "users_count" 10
+    config_set_int "users_count" "$users_count"
     config_set "version" "$XUIFAST_VERSION"
     config_set "installed_at" "$(date -Iseconds)"
     config_set "xui_branch" "$XUI_BRANCH"

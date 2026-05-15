@@ -331,9 +331,87 @@ SVCEOF
         systemctl daemon-reload 2>/dev/null
     fi
 
-    # Create convenience symlink
-    if [ ! -f /usr/bin/x-ui ]; then
-        ln -sf "$XUI_BIN" /usr/bin/x-ui 2>/dev/null
+    # Install x-ui management script (the bash wrapper, not the binary)
+    # The 3X-UI archive includes x-ui.sh — a management CLI
+    if [ -f "${XUI_DIR}/x-ui.sh" ]; then
+        cp "${XUI_DIR}/x-ui.sh" /usr/bin/x-ui 2>/dev/null
+        chmod +x /usr/bin/x-ui 2>/dev/null
+    elif [ ! -f /usr/bin/x-ui ]; then
+        # Fallback: create a minimal management wrapper
+        cat > /usr/bin/x-ui << 'MGMTEOF'
+#!/bin/bash
+# x-ui management script (installed by XUIFAST)
+red='\033[0;31m'; green='\033[0;32m'; yellow='\033[0;33m'; plain='\033[0m'
+SERVICE="x-ui"
+BIN="/usr/local/x-ui/x-ui"
+
+show_status() {
+    if systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
+        echo -e "${green}x-ui is running${plain}"
+    else
+        echo -e "${red}x-ui is not running${plain}"
+    fi
+}
+
+show_menu() {
+    echo -e "
+  ${green}x-ui management script${plain}
+  ————————————————————
+  ${green}0.${plain} Exit
+  ${green}1.${plain} Start
+  ${green}2.${plain} Stop
+  ${green}3.${plain} Restart
+  ${green}4.${plain} Status
+  ${green}5.${plain} Show settings
+  ${green}6.${plain} Show log
+  "
+    show_status
+    echo ""
+    read -rp "  Choose [0-6]: " choice
+    case "$choice" in
+        0) exit 0 ;;
+        1) systemctl start "$SERVICE" && echo -e "${green}Started${plain}" ;;
+        2) systemctl stop "$SERVICE" && echo -e "${green}Stopped${plain}" ;;
+        3) systemctl restart "$SERVICE" && echo -e "${green}Restarted${plain}" ;;
+        4) systemctl status "$SERVICE" --no-pager ;;
+        5)
+            if [ -f "$BIN" ]; then
+                "$BIN" setting -show 2>/dev/null || true
+            fi
+            if [ -f /root/.xuifast_credentials ]; then
+                echo ""
+                echo "  XUIFAST credentials:"
+                cat /root/.xuifast_credentials | grep -v '^#'
+            fi
+            ;;
+        6) journalctl -u "$SERVICE" --no-pager -n 50 ;;
+        *) echo -e "${red}Invalid choice${plain}" ;;
+    esac
+}
+
+# Support CLI arguments: x-ui start, x-ui stop, etc.
+case "${1:-}" in
+    start)    systemctl start "$SERVICE" ;;
+    stop)     systemctl stop "$SERVICE" ;;
+    restart)  systemctl restart "$SERVICE" ;;
+    status)   systemctl status "$SERVICE" --no-pager ;;
+    log)      journalctl -u "$SERVICE" --no-pager -n 50 ;;
+    setting)  shift; "$BIN" setting "$@" ;;
+    settings) "$BIN" setting -show 2>/dev/null ;;
+    "")       show_menu ;;
+    *)        "$BIN" "$@" ;;
+esac
+MGMTEOF
+        chmod +x /usr/bin/x-ui 2>/dev/null
+    fi
+
+    # Install xuifast convenience command
+    if [ ! -f /usr/local/bin/xuifast ] && [ -f "${SCRIPT_DIR:-/opt/xuifast-installer}/xuifast.sh" ]; then
+        cat > /usr/local/bin/xuifast << XUIFASTEOF
+#!/bin/bash
+exec bash "${SCRIPT_DIR:-/opt/xuifast-installer}/xuifast.sh" "\$@"
+XUIFASTEOF
+        chmod +x /usr/local/bin/xuifast 2>/dev/null
     fi
 
     # ── 7. Enable and start ───────────────────────────────────────────

@@ -120,6 +120,8 @@ I18N[api_inbound_created]="VPN connection created (port 443)"
 I18N[api_inbound_failed]="Failed to create connection"
 
 # ── Users ──────────────────────────────────────────────────────────────
+I18N[users_ask_count]="How many VPN keys to create?"
+I18N[users_ask_count_hint]="(1-100, default: 3)"
 I18N[users_creating]="Creating %d users..."
 I18N[users_created]="%d users created"
 I18N[users_title]="👥 VPN Users"

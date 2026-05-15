@@ -3,7 +3,7 @@
 # Colors, logging, spinner, apt handling, IP/geo detection, JSON config
 
 # ── Version & paths ─────────────────────────────────────────────────────
-XUIFAST_VERSION="3.0.3"
+XUIFAST_VERSION="3.0.4"
 XUIFAST_DIR="${XUIFAST_DIR:-/opt/xuifast}"
 XUIFAST_CONFIG="${XUIFAST_CONFIG:-${XUIFAST_DIR}/config.json}"
 XUI_DIR="/usr/local/x-ui"

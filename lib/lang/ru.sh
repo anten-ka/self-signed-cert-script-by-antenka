@@ -120,6 +120,8 @@ I18N[api_inbound_created]="VPN-подключение создано (порт 4
 I18N[api_inbound_failed]="Ошибка создания подключения"
 
 # ── Users ──────────────────────────────────────────────────────────────
+I18N[users_ask_count]="Сколько VPN-ключей создать?"
+I18N[users_ask_count_hint]="(1-100, по умолчанию: 3)"
 I18N[users_creating]="Создание %d пользователей..."
 I18N[users_created]="Создано %d пользователей"
 I18N[users_title]="👥 Пользователи VPN"
