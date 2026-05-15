@@ -610,17 +610,18 @@ show_credentials() {
     ip=$(get_server_ip 2>/dev/null) || ip="localhost"
 
     local url="https://${ip}:${XUI_PORT}${XUI_WEB_PATH}"
+    local line="${YELLOW}$(printf '═%.0s' {1..55})${NC}"
 
     echo ""
-    echo -e "  ${YELLOW}╔══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${YELLOW}║${NC}  ${BOLD}$(t creds_title)${NC}"
-    echo -e "  ${YELLOW}╠══════════════════════════════════════════════════════════╣${NC}"
-    echo -e "  ${YELLOW}║${NC}  $(t creds_user)  ${CYAN}${XUI_USER}${NC}"
-    echo -e "  ${YELLOW}║${NC}  $(t creds_pass)  ${CYAN}${XUI_PASS}${NC}"
-    echo -e "  ${YELLOW}║${NC}  $(t creds_url)   ${CYAN}${url}${NC}"
-    echo -e "  ${YELLOW}╠══════════════════════════════════════════════════════════╣${NC}"
-    echo -e "  ${YELLOW}║${NC}  ${BOLD}${YELLOW}⚠  $(t creds_save_warning)${NC}"
-    echo -e "  ${YELLOW}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${line}"
+    echo -e "  ${BOLD}$(t creds_title)${NC}"
+    echo -e "  ${line}"
+    echo -e "  $(t creds_user)  ${CYAN}${XUI_USER}${NC}"
+    echo -e "  $(t creds_pass)  ${CYAN}${XUI_PASS}${NC}"
+    echo -e "  $(t creds_url)   ${CYAN}${url}${NC}"
+    echo -e "  ${line}"
+    echo -e "  ${BOLD}${YELLOW}$(t creds_save_warning)${NC}"
+    echo -e "  ${line}"
     echo ""
 }
 
