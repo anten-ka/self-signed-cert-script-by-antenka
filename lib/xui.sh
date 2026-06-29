@@ -1137,6 +1137,10 @@ remove_everything() {
     # 1. Stop everything goVLESS-related (remove_try for failure summary)
     for svc in govless-bot govlessctl cloudflared-quick webapp-frontend \
                tunnel-health.timer govless-audit-prune.timer "$XUI_SERVICE"; do
+        # Only act on units that actually exist. The Lite edition has no bot /
+        # webapp / cloudflared / timer units, so skip them silently instead of
+        # logging alarming FAILs for services that were never installed.
+        systemctl cat "$svc" >/dev/null 2>&1 || continue
         remove_try "stop $svc" systemctl stop "$svc"
         remove_try "disable $svc" systemctl disable "$svc"
     done
@@ -1265,19 +1269,35 @@ configure_panel_tls() {
         fi
 
         if $need_issue; then
-            _govless_issue_panel_cert "$server_ip" "$crt" "$key" || {
-                log_warning "Panel cert: LE shortlived failed → falling back to self-signed (825d)"
+            # Try the Let's Encrypt shortlived IP cert (the same browser-valid
+            # ~6-day auto-renewing cert 3X-UI issues via ssl_cert_issue_for_ip) up
+            # to 3 times. Only after 3 failures fall back to a self-signed cert and
+            # WARN the user. Identical on panel v3.4.1 and v2.9.4 — the cert is
+            # applied via x-ui.db (webCertFile/webKeyFile), which both versions read.
+            local _cert_ok=false _try
+            for _try in 1 2 3; do
+                log_info "$(tf panel_cert_attempt "$_try")"
+                if _govless_issue_panel_cert "$server_ip" "$crt" "$key"; then
+                    _cert_ok=true; break
+                fi
+                [ "$_try" -lt 3 ] && sleep 2
+            done
+            if $_cert_ok; then
+                log_success "$(t panel_cert_le_ok)"
+            else
+                log_warning "$(t panel_cert_le_failed)"
                 openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
                     -keyout "$key" -out "$crt" \
                     -subj "/CN=goVLESS-panel" \
                     -addext "subjectAltName=IP:${server_ip},IP:127.0.0.1,DNS:localhost" \
                     2>/dev/null || {
-                        log_error "Cert generation failed entirely — panel will stay HTTP"
+                        log_error "$(t panel_cert_failed_all)"
                         return 1
                     }
                 chmod 600 "$key"
                 chmod 644 "$crt"
-            }
+                log_warning "$(t panel_cert_selfsigned_note)"
+            fi
         fi
     fi
 
