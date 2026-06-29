@@ -960,7 +960,11 @@ main() {
     # isn't a TTY but a controlling terminal exists, reconnect stdin to it.
     # Detached/non-interactive runs (no /dev/tty) keep their piped stdin so
     # answer-ribbon automation still works.
-    if [ ! -t 0 ] && [ -r /dev/tty ]; then exec < /dev/tty; fi
+    # Prefer the real controlling terminal whenever it exists: an upstream
+    # `apt && git clone && sudo ...` chain (or sudo) can leave fd 0 pointing at a
+    # half-closed/erroring stream even though it still looks like a tty. Reading
+    # from /dev/tty is robust. Fully-detached runs (no /dev/tty) keep piped stdin.
+    if [ -r /dev/tty ]; then exec < /dev/tty 2>/dev/null || true; fi
     init_language
     print_banner
 

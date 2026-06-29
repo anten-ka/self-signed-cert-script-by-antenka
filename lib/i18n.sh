@@ -105,8 +105,8 @@ pick_language_interactive() {
     echo "  │  2) Русский                              │" >&2
     echo "  └──────────────────────────────────────────┘" >&2
     echo -n "  ▸ " >&2
-    local ch
-    read -r ch
+    local ch=""
+    read -r ch </dev/tty 2>/dev/null || read -r ch 2>/dev/null || true
     case "$ch" in
         1|en|EN|english|English) echo "en" ;;
         2|ru|RU|русский|Русский) echo "ru" ;;
