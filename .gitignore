@@ -1,0 +1,24 @@
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Secrets — никогда не коммитим
+.env
+.env.*
+secrets/
+*.pem
+*.key
+.xuifast_credentials
+.govless_credentials
+# Local-only AI notes that may contain credentials
+CLAUDE.local.md
+PROMPT_LOCAL.md
+# Test artifacts on dev machine
+*.log
+/tmp/
+
+__pycache__/
+*.pyc

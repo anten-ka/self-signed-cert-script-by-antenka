@@ -1,0 +1,60 @@
+goVLESS Source-Available License
+Copyright (c) 2025-2026 anten-ka. All rights reserved.
+
+This license governs use of the goVLESS software ("the Software") — the
+installer scripts and the Phase A control plane contained in this repository and
+authored by the copyright holder. By downloading, installing, or using the
+Software you agree to these terms.
+
+1. GRANT
+   The copyright holder grants you a personal, non-exclusive, non-transferable,
+   revocable license to:
+     (a) download, install, run, and modify the Software for your own personal
+         or internal use; and
+     (b) operate it on servers that you own or control.
+
+2. RESTRICTIONS
+   Except with the copyright holder's prior written permission, you may NOT:
+     (a) redistribute, publish, mirror, re-upload, host, or otherwise make the
+         Software or any part of it (original or modified, in source or built
+         form) available to any third party — including through public or
+         private code repositories, archives, file shares, package registries,
+         or messaging channels;
+     (b) sell, rent, sublicense, or offer the Software as a product or paid
+         service to third parties;
+     (c) remove, obscure, or alter any copyright, license, or attribution
+         notice; or
+     (d) use the "goVLESS" name or branding except to identify this project.
+   Modifications are permitted for your own use only; the result remains subject
+   to this license and may not be redistributed.
+
+3. OWNERSHIP
+   The Software is licensed, not sold. The copyright holder retains all right,
+   title, and interest in and to the Software, including all intellectual
+   property rights. All rights not expressly granted here are reserved.
+
+4. THIRD-PARTY SOFTWARE
+   This repository does not contain or distribute third-party software. At
+   install time the Software downloads the following independent programs from
+   their official sources; each is governed solely by its own license and is
+   neither covered nor relicensed by this document:
+     - 3X-UI     (https://github.com/MHSanaei/3x-ui)  — GPL-3.0
+     - Xray-core (https://github.com/XTLS/Xray-core)  — MPL-2.0
+   This license applies only to the copyright holder's own code.
+
+5. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+6. LIMITATION OF LIABILITY
+   IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR
+   OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING
+   FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+   IN THE SOFTWARE.
+
+7. TERMINATION
+   This license terminates automatically if you breach any term. On termination
+   you must cease all use and delete your copies of the Software.
+
+For redistribution, commercial, or other permissions, contact: anten-ka.
