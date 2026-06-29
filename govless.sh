@@ -964,7 +964,7 @@ main() {
     # `apt && git clone && sudo ...` chain (or sudo) can leave fd 0 pointing at a
     # half-closed/erroring stream even though it still looks like a tty. Reading
     # from /dev/tty is robust. Fully-detached runs (no /dev/tty) keep piped stdin.
-    if [ -r /dev/tty ]; then exec < /dev/tty 2>/dev/null || true; fi
+    if [ -r /dev/tty ]; then exec < /dev/tty || true; fi
     init_language
     print_banner
 
